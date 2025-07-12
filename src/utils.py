@@ -15,23 +15,42 @@ def fetch_historical_data():
         try:
             response = requests.get(url)
             response.raise_for_status()
-            year_data = response.json()
-            all_data.extend(year_data)
-            print(f"已获取 {year} 年数据，共 {len(year_data)} 期")
+            json_data = response.json()
+            
+            # 检查API返回的数据结构
+            if 'data' in json_data and isinstance(json_data['data'], list):
+                year_data = json_data['data']
+                all_data.extend(year_data)
+                print(f"已获取 {year} 年数据，共 {len(year_data)} 期")
+            else:
+                print(f"警告：{year}年数据格式不符合预期，跳过")
+                continue
         except Exception as e:
             print(f"获取 {year} 年数据失败: {str(e)}")
     
     # 转换为DataFrame
+    if not all_data:
+        print("错误：没有获取到任何数据")
+        return pd.DataFrame()
+    
     df = pd.DataFrame(all_data)
     
-    # 数据清洗
-    df['date'] = pd.to_datetime(df['date'])
-    df['year'] = df['date'].dt.year
-    df['month'] = df['date'].dt.month
-    df['day'] = df['date'].dt.day
+    # 数据清洗 - 使用API返回的实际字段名
+    if 'openTime' in df.columns:
+        df['date'] = pd.to_datetime(df['openTime'])
+        df['year'] = df['date'].dt.year
+        df['month'] = df['date'].dt.month
+        df['day'] = df['date'].dt.day
+    else:
+        print("警告：数据中缺少'openTime'字段")
     
-    # 解析特别号码
-    df['special'] = df['num'].str.split('+').str[1].astype(int)
+    # 解析特别号码 - 使用API返回的实际字段名
+    if 'openCode' in df.columns:
+        # 示例：openCode = "37,30,49,16,09,12,45"
+        # 我们取最后一个号码作为特别号码
+        df['special'] = df['openCode'].str.split(',').str[-1].astype(int)
+    else:
+        print("警告：数据中缺少'openCode'字段")
     
     return df.sort_values('date').reset_index(drop=True)
 
@@ -104,19 +123,3 @@ def send_email(subject, content, receiver):
     except Exception as e:
         print(f"邮件发送失败: {e}")
         return False
-
-# 测试代码
-if __name__ == "__main__":
-    print("测试 utils 模块")
-    # 测试生肖映射
-    print("生肖映射测试: 1 ->", zodiac_mapping(1))
-    print("生肖映射测试: 13 ->", zodiac_mapping(13))
-    
-    # 测试通知函数（需要设置环境变量）
-    if os.getenv("DINGTALK_WEBHOOK"):
-        print("测试钉钉通知...")
-        send_dingtalk("测试消息", os.getenv("DINGTALK_WEBHOOK"))
-    
-    if os.getenv("EMAIL_USER") and os.getenv("EMAIL_PWD"):
-        print("测试邮件通知...")
-        send_email("测试邮件", "这是一个测试邮件", os.getenv("EMAIL_USER"))
