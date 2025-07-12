@@ -1,12 +1,11 @@
 import requests
 import pandas as pd
-import numpy as np
-from config import START_YEAR, CURRENT_YEAR, API_URL
 import smtplib
 from email.mime.text import MIMEText
 import os
 import json
 from datetime import datetime
+from config import START_YEAR, CURRENT_YEAR, API_URL
 
 def fetch_historical_data():
     """获取2023年至今的历史开奖数据"""
@@ -78,3 +77,46 @@ def send_dingtalk(message, webhook):
     except Exception as e:
         print(f"钉钉通知发送失败: {e}")
         return False
+
+def send_email(subject, content, receiver):
+    """发送邮件通知"""
+    sender = os.getenv("EMAIL_USER")
+    password = os.getenv("EMAIL_PWD")
+    
+    if not sender or not password:
+        print("邮箱凭据未设置，跳过邮件发送")
+        return False
+    
+    # 创建邮件内容
+    msg = MIMEText(content, 'plain', 'utf-8')
+    msg['Subject'] = subject
+    msg['From'] = sender
+    msg['To'] = receiver
+    
+    try:
+        # 使用SMTP_SSL连接QQ邮箱的SMTP服务器
+        server = smtplib.SMTP_SSL('smtp.qq.com', 465)
+        server.login(sender, password)
+        server.sendmail(sender, [receiver], msg.as_string())
+        server.quit()
+        print("邮件发送成功")
+        return True
+    except Exception as e:
+        print(f"邮件发送失败: {e}")
+        return False
+
+# 测试代码
+if __name__ == "__main__":
+    print("测试 utils 模块")
+    # 测试生肖映射
+    print("生肖映射测试: 1 ->", zodiac_mapping(1))
+    print("生肖映射测试: 13 ->", zodiac_mapping(13))
+    
+    # 测试通知函数（需要设置环境变量）
+    if os.getenv("DINGTALK_WEBHOOK"):
+        print("测试钉钉通知...")
+        send_dingtalk("测试消息", os.getenv("DINGTALK_WEBHOOK"))
+    
+    if os.getenv("EMAIL_USER") and os.getenv("EMAIL_PWD"):
+        print("测试邮件通知...")
+        send_email("测试邮件", "这是一个测试邮件", os.getenv("EMAIL_USER"))
