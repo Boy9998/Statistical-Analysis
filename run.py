@@ -1,11 +1,11 @@
 import os
 import sys
 
-# 添加src目录到系统路径
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+# 确保正确导入路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from utils import send_dingtalk, send_email
-from analysis import LotteryAnalyzer
+from src.analysis import LotteryAnalyzer
+from src.utils import send_dingtalk, send_email
 
 def main():
     print("开始分析历史数据...")
