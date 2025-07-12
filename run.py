@@ -1,6 +1,11 @@
-from src.analysis import LotteryAnalyzer
-from src.utils import send_dingtalk, send_email
 import os
+import sys
+
+# 添加src目录到系统路径
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
+from utils import send_dingtalk, send_email
+from analysis import LotteryAnalyzer
 
 def main():
     print("开始分析历史数据...")
