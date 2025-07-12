@@ -42,41 +42,39 @@ def zodiac_mapping(number):
     return zodiacs[(number - 1) % 12]
 
 def send_dingtalk(message, webhook):
-    """发送钉钉通知"""
+    """发送钉钉通知（支持加签验证）"""
+    import hashlib
+    import hmac
+    import base64
+    import urllib.parse
+    import time
+    
+    secret = os.getenv("DINGTALK_SECRET")
+    if not secret:
+        print("钉钉密钥未设置，跳过通知")
+        return False
+    
+    # 1. 生成时间戳和签名
+    timestamp = str(round(time.time() * 1000))
+    secret_enc = secret.encode('utf-8')
+    string_to_sign = f'{timestamp}\n{secret}'
+    string_to_sign_enc = string_to_sign.encode('utf-8')
+    hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
+    sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+    
+    # 2. 构建带签名的URL
+    signed_webhook = f"{webhook}&timestamp={timestamp}&sign={sign}"
+    
+    # 3. 发送请求
     headers = {"Content-Type": "application/json"}
     payload = {
         "msgtype": "text",
         "text": {"content": f"彩票分析报告:\n{message}"}
     }
     try:
-        response = requests.post(webhook, json=payload, headers=headers)
+        response = requests.post(signed_webhook, json=payload, headers=headers)
         print(f"钉钉通知发送状态: {response.status_code}")
         return True
     except Exception as e:
         print(f"钉钉通知发送失败: {e}")
-        return False
-
-def send_email(subject, content, receiver):
-    """发送邮件通知"""
-    sender = os.getenv("EMAIL_USER")
-    password = os.getenv("EMAIL_PWD")
-    
-    if not sender or not password:
-        print("邮箱凭据未设置，跳过邮件发送")
-        return False
-    
-    msg = MIMEText(content, 'plain', 'utf-8')
-    msg['Subject'] = subject
-    msg['From'] = sender
-    msg['To'] = receiver
-    
-    try:
-        server = smtplib.SMTP_SSL('smtp.qq.com', 465)
-        server.login(sender, password)
-        server.sendmail(sender, [receiver], msg.as_string())
-        server.quit()
-        print("邮件发送成功")
-        return True
-    except Exception as e:
-        print(f"邮件发送失败: {e}")
         return False
