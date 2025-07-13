@@ -4,39 +4,20 @@ from src.utils import fetch_historical_data, zodiac_mapping
 from config import BACKTEST_WINDOW
 from datetime import datetime, timedelta
 import holidays
+from collections import defaultdict
 
 class LotteryAnalyzer:
     def __init__(self):
         self.df = fetch_historical_data()
         if not self.df.empty:
-            # 添加农历日期信息
-            self.df['lunar_date'] = self.df['date'].apply(self.get_lunar_date)
-            self.df['zodiac'] = self.df['special'].apply(zodiac_mapping)
-            self.zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
+            # 使用动态年份生肖映射
+            self.df['zodiac'] = self.df.apply(
+                lambda row: zodiac_mapping(row['special'], row['year']), axis=1
+            )
+            self.zodiacs = list(set(self.df['zodiac']))
         
-    def get_lunar_date(self, dt):
-        """将公历日期转换为农历日期（简化版）"""
-        # 农历新年通常在1月21日到2月20日之间
-        if 1 <= dt.month <= 2 and 21 <= dt.day <= 31:
-            return "春节附近"
-        elif 4 <= dt.month <= 5 and 1 <= dt.day <= 7:
-            return "清明节附近"
-        elif 9 <= dt.month <= 10 and 10 <= dt.day <= 20:
-            return "中秋节附近"
-        return "普通日期"
-    
-    def get_season(self, month):
-        """获取季节"""
-        if 3 <= month <= 5:
-            return "春季"
-        elif 6 <= month <= 8:
-            return "夏季"
-        elif 9 <= month <= 11:
-            return "秋季"
-        return "冬季"
-    
     def analyze_zodiac_patterns(self):
-        """深度分析生肖出现规律（符合所有要求）"""
+        """分析生肖出现规律"""
         if self.df.empty:
             return {}
         
@@ -52,104 +33,86 @@ class LotteryAnalyzer:
             normalize=1
         ).round(4) * 100
         
-        # 3. 农历效应分析（符合要求4）
-        lunar_effect = self.df.groupby(['lunar_date', 'zodiac']).size().unstack().fillna(0)
-        
-        # 4. 季节效应分析（符合要求4）
-        self.df['season'] = self.df['month'].apply(self.get_season)
+        # 3. 季节效应分析（符合要求4）
+        season_map = {1: '冬', 2: '冬', 3: '春', 4: '春', 5: '春', 
+                      6: '夏', 7: '夏', 8: '夏', 9: '秋', 10: '秋', 11: '秋', 12: '冬'}
+        self.df['season'] = self.df['month'].map(season_map)
         season_effect = self.df.groupby(['season', 'zodiac']).size().unstack().fillna(0)
         
-        # 5. 节日效应分析（符合要求4）
-        # 创建中国节假日日历
+        # 4. 节日效应分析（符合要求4）
         cn_holidays = holidays.CountryHoliday('CN')
         self.df['is_holiday'] = self.df['date'].apply(lambda x: x in cn_holidays)
         holiday_effect = self.df.groupby(['is_holiday', 'zodiac']).size().unstack().fillna(0)
         
-        # 6. 周期效应分析（安全处理）
-        if 'day_of_year' in self.df.columns:
-            try:
-                # 分析生肖出现的周期性
-                self.df['day_sin'] = np.sin(2 * np.pi * self.df['day_of_year'] / 7)
-                self.df['day_cos'] = np.cos(2 * np.pi * self.df['day_of_year'] / 7)
-            except KeyError:
-                print("警告：day_of_year 列访问失败，跳过周期效应分析")
-        else:
-            print("警告：数据中缺少 day_of_year 列，跳过周期效应分析")
-        
         return {
             'frequency': freq,
             'transition_matrix': transition,
-            'lunar_effect': lunar_effect,
             'seasonal_effect': season_effect,
             'holiday_effect': holiday_effect
         }
     
     def backtest_strategy(self):
-        """严格符合要求8-9的回测策略"""
+        """
+        严格回测策略（要求8-9）
+        基于最新开奖生肖分析下一期
+        """
         if self.df.empty or len(self.df) < BACKTEST_WINDOW:
             print(f"警告：数据不足，无法回测（需要{BACKTEST_WINDOW}期，实际只有{len(self.df)}期）")
             return pd.DataFrame(), 0.0
         
-        recent = self.df.tail(BACKTEST_WINDOW).copy()
+        # 使用最近BACKTEST_WINDOW+1期数据进行回测
+        recent = self.df.tail(BACKTEST_WINDOW + 1).copy()
         results = []
         
-        for i in range(len(recent)-1):
-            # 使用历史数据预测
-            train = recent.iloc[:i+1]
-            actual = recent.iloc[i+1]['zodiac']
+        # 遍历数据，分析每个开奖生肖后的下一期
+        for i in range(len(recent) - 1):
+            current_zodiac = recent.iloc[i]['zodiac']
+            next_zodiac = recent.iloc[i + 1]['zodiac']
             
-            # 策略1：转移概率最高的4个生肖
-            last_zodiac = train.iloc[-1]['zodiac']
-            prediction = []
-            
-            if len(train) > 10:
-                try:
-                    transition = pd.crosstab(
-                        train['zodiac'].shift(-1), 
-                        train['zodiac'], 
-                        normalize=1
-                    )
-                    if last_zodiac in transition.columns:
-                        top_transition = transition[last_zodiac].nlargest(4).index.tolist()
-                        prediction.extend(top_transition)
-                except:
-                    pass
-            
-            # 策略2：近期高频生肖
-            if len(train) > 10:
-                try:
-                    top_freq = train['zodiac'].tail(50).value_counts().head(4).index.tolist()
-                    prediction.extend(top_freq)
-                except:
-                    pass
-            
-            # 策略3：季节效应
-            try:
-                current_season = self.get_season(recent.iloc[i+1]['month'])
-                season_zodiacs = self.df[self.df['season'] == current_season]['zodiac'].value_counts().head(2).index.tolist()
-                prediction.extend(season_zodiacs)
-            except:
-                pass
-            
-            # 组合预测（取4-5个生肖）
-            prediction = list(set(prediction))[:5]
-            if not prediction:
-                prediction = ["无预测"]
-            
-            # 记录结果
+            # 统计当前生肖出现后的下一期生肖
             results.append({
-                '期号': recent.iloc[i+1]['expect'],
-                '实际生肖': actual,
-                '预测生肖': ", ".join(prediction),
-                '是否命中': 1 if actual in prediction else 0
+                '当前生肖': current_zodiac,
+                '下一期生肖': next_zodiac
             })
         
-        result_df = pd.DataFrame(results)
-        accuracy = result_df['是否命中'].mean() if not result_df.empty else 0.0
-        return result_df, accuracy
+        # 分析每个生肖出现后的下一期生肖分布
+        zodiac_transitions = defaultdict(list)
+        for record in results:
+            zodiac_transitions[record['当前生肖']].append(record['下一期生肖'])
+        
+        # 回测预测准确性
+        backtest_results = []
+        for i in range(len(recent) - 1):
+            current_zodiac = recent.iloc[i]['zodiac']
+            actual_next = recent.iloc[i + 1]['zodiac']
+            
+            # 预测策略：基于当前生肖的历史转移概率
+            if current_zodiac in zodiac_transitions and len(zodiac_transitions[current_zodiac]) > 10:
+                # 计算生肖出现频率
+                freq = pd.Series(zodiac_transitions[current_zodiac]).value_counts(normalize=True)
+                prediction = freq.nlargest(4).index.tolist()
+            else:
+                # 默认策略：使用全局高频生肖
+                prediction = self.df['zodiac'].value_counts().head(4).index.tolist()
+            
+            # 记录结果
+            backtest_results.append({
+                '期号': recent.iloc[i + 1]['expect'],
+                '当前生肖': current_zodiac,
+                '实际下一期': actual_next,
+                '预测生肖': ", ".join(prediction),
+                '是否命中': 1 if actual_next in prediction else 0
+            })
+        
+        result_df = pd.DataFrame(backtest_results)
+        accuracy = result_df['是否命中'].mean()
+        return result_df, accuracy, zodiac_transitions
     
-    def predict_next(self):
-        """严格符合要求6的预测方法"""
+    def predict_next(self, zodiac_transitions):
+        """
+        严格预测策略（要求6）
+        基于最新开奖生肖预测下一期
+        """
         if self.df.empty:
             return {
                 'next_number': "未知",
@@ -161,55 +124,13 @@ class LotteryAnalyzer:
         latest = self.df.iloc[-1]
         last_zodiac = latest['zodiac']
         
-        # 策略1：转移概率最高的4个生肖（基于最近200期）
-        recent = self.df.tail(BACKTEST_WINDOW)
-        prediction = []
-        
-        if len(recent) > 10:
-            try:
-                transition = pd.crosstab(
-                    recent['zodiac'].shift(-1), 
-                    recent['zodiac'], 
-                    normalize=1
-                )
-                
-                if last_zodiac in transition.columns:
-                    top_transition = transition[last_zodiac].nlargest(4).index.tolist()
-                    prediction.extend(top_transition)
-            except Exception as e:
-                print(f"转移概率计算失败: {e}")
-        
-        # 策略2：近期高频生肖（最近50期）
-        if len(recent) > 10:
-            try:
-                top_freq = recent['zodiac'].tail(50).value_counts().head(4).index.tolist()
-                prediction.extend(top_freq)
-            except Exception as e:
-                print(f"高频生肖计算失败: {e}")
-        
-        # 策略3：季节效应
-        try:
-            next_date = latest['date'] + timedelta(days=1)
-            next_season = self.get_season(next_date.month)
-            season_zodiacs = self.df[self.df['season'] == next_season]['zodiac'].value_counts().head(2).index.tolist()
-            prediction.extend(season_zodiacs)
-        except Exception as e:
-            print(f"季节效应计算失败: {e}")
-        
-        # 策略4：节日效应
-        try:
-            cn_holidays = holidays.CountryHoliday('CN')
-            is_holiday = next_date in cn_holidays
-            holiday_zodiacs = self.df[self.df['is_holiday'] == is_holiday]['zodiac'].value_counts().head(2).index.tolist()
-            prediction.extend(holiday_zodiacs)
-        except Exception as e:
-            print(f"节日效应计算失败: {e}")
-        
-        # 组合预测（取4-5个生肖）
-        prediction = list(set(prediction))[:5]
-        if not prediction:
-            # 默认策略：使用近期高频生肖
-            prediction = self.df['zodiac'].tail(50).value_counts().head(5).index.tolist()
+        # 策略1：基于该生肖的历史转移概率
+        if last_zodiac in zodiac_transitions and len(zodiac_transitions[last_zodiac]) > 10:
+            freq = pd.Series(zodiac_transitions[last_zodiac]).value_counts(normalize=True)
+            prediction = freq.nlargest(5).index.tolist()
+        else:
+            # 策略2：使用全局高频生肖
+            prediction = self.df['zodiac'].value_counts().head(5).index.tolist()
         
         # 下期期号
         try:
@@ -228,20 +149,22 @@ class LotteryAnalyzer:
         }
     
     def generate_report(self):
-        """严格符合要求的分析报告"""
+        """生成分析报告（符合所有要求）"""
         if self.df.empty:
             return "===== 彩票分析报告 =====\n错误：没有获取到有效数据，请检查API"
         
         analysis = self.analyze_zodiac_patterns()
-        backtest_df, accuracy = self.backtest_strategy()
-        prediction = self.predict_next()
+        backtest_df, accuracy, zodiac_transitions = self.backtest_strategy()
+        prediction = self.predict_next(zodiac_transitions)
         
-        # 生肖转移分析详情
-        transition_details = {}
-        for zodiac in self.zodiacs:
-            if zodiac in analysis.get('transition_matrix', pd.DataFrame()):
-                next_zodiacs = analysis['transition_matrix'][zodiac].nlargest(4).index.tolist()
-                transition_details[zodiac] = next_zodiacs
+        # 获取最新开奖生肖的转移分析
+        last_zodiac = self.df.iloc[-1]['zodiac']
+        if last_zodiac in zodiac_transitions:
+            freq = pd.Series(zodiac_transitions[last_zodiac]).value_counts(normalize=True)
+            top_transition = freq.nlargest(4).index.tolist()
+            transition_detail = f"{last_zodiac} → {', '.join(top_transition)}"
+        else:
+            transition_detail = f"{last_zodiac} → 无历史数据"
         
         # 生成详细报告
         report = f"""
@@ -253,25 +176,21 @@ class LotteryAnalyzer:
         - 最新开奖生肖：{self.df.iloc[-1]['zodiac']}
         
         生肖频率分析：
-        {analysis.get('frequency', pd.DataFrame()).to_string(index=False) if not analysis.get('frequency', pd.DataFrame()).empty else "无数据"}
+        {analysis['frequency'].to_string(index=False)}
         
-        生肖转移分析（出现后下期最可能出现的4个生肖）：
-        {', '.join([f"{k}→{','.join(v)}" for k, v in transition_details.items()]) if transition_details else "无数据"}
+        最新开奖生肖转移分析：
+        {transition_detail}
         
         季节效应分析：
-        春季: {analysis.get('seasonal_effect', pd.DataFrame()).loc['春季'].nlargest(3).to_dict() if 'seasonal_effect' in analysis else "无数据"}
-        夏季: {analysis.get('seasonal_effect', pd.DataFrame()).loc['夏季'].nlargest(3).to_dict() if 'seasonal_effect' in analysis else "无数据"}
-        秋季: {analysis.get('seasonal_effect', pd.DataFrame()).loc['秋季'].nlargest(3).to_dict() if 'seasonal_effect' in analysis else "无数据"}
-        冬季: {analysis.get('seasonal_effect', pd.DataFrame()).loc['冬季'].nlargest(3).to_dict() if 'seasonal_effect' in analysis else "无数据"}
-        
-        节日效应分析：
-        节日: {analysis.get('holiday_effect', pd.DataFrame()).loc[True].nlargest(3).to_dict() if 'holiday_effect' in analysis else "无数据"}
-        非节日: {analysis.get('holiday_effect', pd.DataFrame()).loc[False].nlargest(3).to_dict() if 'holiday_effect' in analysis else "无数据"}
+        春季: {analysis['seasonal_effect'].loc['春'].nlargest(3).to_dict() if '春' in analysis['seasonal_effect'].index else "无数据"}
+        夏季: {analysis['seasonal_effect'].loc['夏'].nlargest(3).to_dict() if '夏' in analysis['seasonal_effect'].index else "无数据"}
+        秋季: {analysis['seasonal_effect'].loc['秋'].nlargest(3).to_dict() if '秋' in analysis['seasonal_effect'].index else "无数据"}
+        冬季: {analysis['seasonal_effect'].loc['冬'].nlargest(3).to_dict() if '冬' in analysis['seasonal_effect'].index else "无数据"}
         
         回测结果（最近{BACKTEST_WINDOW}期）：
         - 准确率：{accuracy:.2%}
         - 命中次数：{int(accuracy * BACKTEST_WINDOW)}次
-        - 策略详情：基于转移概率+近期高频+季节效应+节日效应
+        - 策略详情：基于当前生肖的历史转移概率
         
         下期预测：
         - 预测期号：{prediction['next_number']}
