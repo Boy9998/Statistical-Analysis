@@ -4,116 +4,139 @@ from src.utils import fetch_historical_data, zodiac_mapping
 from config import BACKTEST_WINDOW
 from datetime import datetime, timedelta
 import holidays
-from collections import defaultdict
+import re
 
 class LotteryAnalyzer:
     def __init__(self):
+        """初始化分析器，获取历史数据并处理生肖映射"""
+        print("开始获取历史数据...")
         self.df = fetch_historical_data()
         if not self.df.empty:
-            # 使用动态年份生肖映射
+            print(f"成功获取 {len(self.df)} 条历史开奖记录")
+            
+            # 应用基于年份的动态生肖映射
             self.df['zodiac'] = self.df.apply(
                 lambda row: zodiac_mapping(row['special'], row['year']), axis=1
             )
-            self.zodiacs = list(set(self.df['zodiac']))
-        
+            
+            # 确保生肖数据有效
+            valid_zodiacs = self.df['zodiac'].isin(["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"])
+            if not valid_zodiacs.all():
+                invalid_count = len(self.df) - valid_zodiacs.sum()
+                print(f"警告：发现 {invalid_count} 条记录的生肖映射无效")
+                self.df = self.df[valid_zodiacs]
+            
+            self.zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
+            
+            # 打印最新开奖信息
+            latest = self.df.iloc[-1]
+            print(f"最新开奖记录: 期号 {latest['expect']}, 日期 {latest['date'].date()}, 生肖 {latest['zodiac']}")
+        else:
+            print("警告：未获取到任何有效数据")
+    
     def analyze_zodiac_patterns(self):
         """分析生肖出现规律"""
         if self.df.empty:
+            print("无法进行分析 - 数据为空")
             return {}
         
-        # 1. 生肖频率分析
+        print("开始分析生肖出现规律...")
+        
+        # 1. 生肖频率分析（基于全部历史数据）
         freq = self.df['zodiac'].value_counts().reset_index()
         freq.columns = ['生肖', '出现次数']
         freq['频率(%)'] = round(freq['出现次数'] / len(self.df) * 100, 2)
         
-        # 2. 生肖转移分析（符合要求5）
-        transition = pd.crosstab(
-            self.df['zodiac'].shift(-1), 
-            self.df['zodiac'], 
-            normalize=1
-        ).round(4) * 100
-        
-        # 3. 季节效应分析（符合要求4）
-        season_map = {1: '冬', 2: '冬', 3: '春', 4: '春', 5: '春', 
-                      6: '夏', 7: '夏', 8: '夏', 9: '秋', 10: '秋', 11: '秋', 12: '冬'}
-        self.df['season'] = self.df['month'].map(season_map)
-        season_effect = self.df.groupby(['season', 'zodiac']).size().unstack().fillna(0)
-        
-        # 4. 节日效应分析（符合要求4）
-        cn_holidays = holidays.CountryHoliday('CN')
-        self.df['is_holiday'] = self.df['date'].apply(lambda x: x in cn_holidays)
-        holiday_effect = self.df.groupby(['is_holiday', 'zodiac']).size().unstack().fillna(0)
+        # 2. 生肖转移分析（基于最近200期）
+        if len(self.df) >= BACKTEST_WINDOW:
+            recent = self.df.tail(BACKTEST_WINDOW)
+            print(f"使用最近{BACKTEST_WINDOW}期数据计算转移矩阵")
+            
+            # 创建转移矩阵
+            transition = pd.crosstab(
+                recent['zodiac'].shift(-1), 
+                recent['zodiac'], 
+                normalize=1
+            ).round(4) * 100
+        else:
+            print(f"数据不足{BACKTEST_WINDOW}期，使用全部数据计算转移矩阵")
+            transition = pd.crosstab(
+                self.df['zodiac'].shift(-1), 
+                self.df['zodiac'], 
+                normalize=1
+            ).round(4) * 100
         
         return {
             'frequency': freq,
-            'transition_matrix': transition,
-            'seasonal_effect': season_effect,
-            'holiday_effect': holiday_effect
+            'transition_matrix': transition
         }
     
     def backtest_strategy(self):
-        """
-        严格回测策略（要求8-9）
-        基于最新开奖生肖分析下一期
-        """
-        if self.df.empty or len(self.df) < BACKTEST_WINDOW:
-            print(f"警告：数据不足，无法回测（需要{BACKTEST_WINDOW}期，实际只有{len(self.df)}期）")
+        """严格回测预测策略（基于最近200期）"""
+        if self.df.empty:
+            print("无法回测 - 数据为空")
             return pd.DataFrame(), 0.0
         
-        # 使用最近BACKTEST_WINDOW+1期数据进行回测
-        recent = self.df.tail(BACKTEST_WINDOW + 1).copy()
+        if len(self.df) < BACKTEST_WINDOW:
+            print(f"警告：数据不足{BACKTEST_WINDOW}期，实际只有{len(self.df)}期")
+            return pd.DataFrame(), 0.0
+        
+        print(f"开始回测策略（最近{BACKTEST_WINDOW}期）...")
+        recent = self.df.tail(BACKTEST_WINDOW).copy().reset_index(drop=True)
         results = []
         
-        # 遍历数据，分析每个开奖生肖后的下一期
-        for i in range(len(recent) - 1):
-            current_zodiac = recent.iloc[i]['zodiac']
-            next_zodiac = recent.iloc[i + 1]['zodiac']
+        for i in range(len(recent)-1):
+            # 使用历史数据预测
+            train = recent.iloc[:i+1]
+            actual = recent.iloc[i+1]['zodiac']
+            last_zodiac = train.iloc[-1]['zodiac']
             
-            # 统计当前生肖出现后的下一期生肖
-            results.append({
-                '当前生肖': current_zodiac,
-                '下一期生肖': next_zodiac
-            })
-        
-        # 分析每个生肖出现后的下一期生肖分布
-        zodiac_transitions = defaultdict(list)
-        for record in results:
-            zodiac_transitions[record['当前生肖']].append(record['下一期生肖'])
-        
-        # 回测预测准确性
-        backtest_results = []
-        for i in range(len(recent) - 1):
-            current_zodiac = recent.iloc[i]['zodiac']
-            actual_next = recent.iloc[i + 1]['zodiac']
-            
-            # 预测策略：基于当前生肖的历史转移概率
-            if current_zodiac in zodiac_transitions and len(zodiac_transitions[current_zodiac]) > 10:
-                # 计算生肖出现频率
-                freq = pd.Series(zodiac_transitions[current_zodiac]).value_counts(normalize=True)
-                prediction = freq.nlargest(4).index.tolist()
-            else:
-                # 默认策略：使用全局高频生肖
-                prediction = self.df['zodiac'].value_counts().head(4).index.tolist()
+            # 策略：转移概率最高的4个生肖
+            try:
+                # 创建转移矩阵
+                transition = pd.crosstab(
+                    train['zodiac'].shift(-1), 
+                    train['zodiac'], 
+                    normalize=1
+                )
+                
+                prediction = []
+                if last_zodiac in transition.columns:
+                    # 获取转移概率最高的4个生肖
+                    top_zodiacs = transition[last_zodiac].nlargest(4)
+                    prediction = top_zodiacs.index.tolist()
+                    
+                    # 打印调试信息
+                    if i == len(recent)-2:  # 最新一期
+                        print(f"最新回测预测: 上期生肖={last_zodiac}, 预测生肖={prediction}, 实际生肖={actual}")
+            except Exception as e:
+                print(f"回测过程中出错: {e}")
+                prediction = []
             
             # 记录结果
-            backtest_results.append({
-                '期号': recent.iloc[i + 1]['expect'],
-                '当前生肖': current_zodiac,
-                '实际下一期': actual_next,
-                '预测生肖': ", ".join(prediction),
-                '是否命中': 1 if actual_next in prediction else 0
+            results.append({
+                '期号': recent.iloc[i+1]['expect'],
+                '上期生肖': last_zodiac,
+                '实际生肖': actual,
+                '预测生肖': ", ".join(prediction) if prediction else "无预测",
+                '是否命中': 1 if actual in prediction else 0
             })
         
-        result_df = pd.DataFrame(backtest_results)
-        accuracy = result_df['是否命中'].mean()
-        return result_df, accuracy, zodiac_transitions
+        result_df = pd.DataFrame(results)
+        if not result_df.empty:
+            accuracy = result_df['是否命中'].mean()
+            hit_count = result_df['是否命中'].sum()
+            print(f"回测完成: 准确率={accuracy:.2%}, 命中次数={hit_count}/{len(result_df)}")
+        else:
+            accuracy = 0.0
+            print("回测完成: 无有效结果")
+        
+        return result_df, accuracy
     
-    def predict_next(self, zodiac_transitions):
-        """
-        严格预测策略（要求6）
-        基于最新开奖生肖预测下一期
-        """
+    def predict_next(self):
+        """预测下期生肖（严格基于最近200期）"""
         if self.df.empty:
+            print("无法预测 - 数据为空")
             return {
                 'next_number': "未知",
                 'prediction': ["无数据"],
@@ -123,25 +146,58 @@ class LotteryAnalyzer:
         # 获取最新数据
         latest = self.df.iloc[-1]
         last_zodiac = latest['zodiac']
+        print(f"开始预测下期: 最新生肖={last_zodiac}")
         
-        # 策略1：基于该生肖的历史转移概率
-        if last_zodiac in zodiac_transitions and len(zodiac_transitions[last_zodiac]) > 10:
-            freq = pd.Series(zodiac_transitions[last_zodiac]).value_counts(normalize=True)
-            prediction = freq.nlargest(5).index.tolist()
+        # 基于最近200期数据
+        if len(self.df) < BACKTEST_WINDOW:
+            print(f"数据不足{BACKTEST_WINDOW}期，使用全部数据进行预测")
+            recent = self.df
         else:
-            # 策略2：使用全局高频生肖
-            prediction = self.df['zodiac'].value_counts().head(5).index.tolist()
+            print(f"使用最近{BACKTEST_WINDOW}期数据预测")
+            recent = self.df.tail(BACKTEST_WINDOW)
+        
+        # 策略：转移概率最高的4个生肖
+        try:
+            # 创建转移矩阵
+            transition = pd.crosstab(
+                recent['zodiac'].shift(-1), 
+                recent['zodiac'], 
+                normalize=1
+            )
+            
+            prediction = []
+            if last_zodiac in transition.columns:
+                # 获取转移概率最高的4个生肖
+                top_zodiacs = transition[last_zodiac].nlargest(4)
+                prediction = top_zodiacs.index.tolist()
+                
+                # 打印转移概率详情
+                print(f"转移概率分析: {last_zodiac} → {', '.join([f'{z}({p:.1%})' for z, p in top_zodiacs.items()])}")
+            else:
+                print(f"警告：生肖 '{last_zodiac}' 在转移矩阵中无数据")
+                
+                # 备用策略：使用近期高频生肖
+                top_freq = recent['zodiac'].value_counts().head(4).index.tolist()
+                prediction = top_freq
+                print(f"使用备用策略: 近期高频生肖 - {', '.join(top_freq)}")
+        except Exception as e:
+            print(f"预测过程中出错: {e}")
+            # 默认策略：使用近期高频生肖
+            top_freq = self.df['zodiac'].tail(50).value_counts().head(4).index.tolist()
+            prediction = top_freq
+            print(f"使用备用策略: 近期高频生肖 - {', '.join(top_freq)}")
         
         # 下期期号
         try:
-            last_expect = self.df.iloc[-1]['expect']
-            if isinstance(last_expect, str) and last_expect.isdigit():
+            last_expect = latest['expect']
+            if re.match(r'^\d+$', last_expect):
                 next_num = str(int(last_expect) + 1)
             else:
                 next_num = "未知"
         except:
             next_num = "未知"
         
+        print(f"预测结果: 下期期号={next_num}, 推荐生肖={', '.join(prediction)}")
         return {
             'next_number': next_num,
             'prediction': prediction,
@@ -149,52 +205,65 @@ class LotteryAnalyzer:
         }
     
     def generate_report(self):
-        """生成分析报告（符合所有要求）"""
+        """生成符合要求的分析报告"""
         if self.df.empty:
-            return "===== 彩票分析报告 =====\n错误：没有获取到有效数据，请检查API"
+            report = "===== 彩票分析报告 =====\n错误：没有获取到有效数据，请检查API"
+            print(report)
+            return report
         
+        # 获取最新开奖信息
+        latest = self.df.iloc[-1]
+        last_expect = latest['expect']
+        last_zodiac = latest['zodiac']
+        last_date = latest['date'].strftime('%Y-%m-%d')
+        
+        # 生肖分析
         analysis = self.analyze_zodiac_patterns()
-        backtest_df, accuracy, zodiac_transitions = self.backtest_strategy()
-        prediction = self.predict_next(zodiac_transitions)
         
-        # 获取最新开奖生肖的转移分析
-        last_zodiac = self.df.iloc[-1]['zodiac']
-        if last_zodiac in zodiac_transitions:
-            freq = pd.Series(zodiac_transitions[last_zodiac]).value_counts(normalize=True)
-            top_transition = freq.nlargest(4).index.tolist()
-            transition_detail = f"{last_zodiac} → {', '.join(top_transition)}"
-        else:
-            transition_detail = f"{last_zodiac} → 无历史数据"
+        # 回测结果
+        backtest_df, accuracy = self.backtest_strategy()
+        
+        # 预测下期
+        prediction = self.predict_next()
+        
+        # 针对最新生肖的转移分析
+        transition_details = {}
+        if 'transition_matrix' in analysis:
+            transition_matrix = analysis['transition_matrix']
+            if last_zodiac in transition_matrix.columns:
+                next_zodiacs = transition_matrix[last_zodiac].nlargest(4)
+                transition_details[last_zodiac] = [
+                    f"{zodiac}({prob:.1f}%)" for zodiac, prob in next_zodiacs.items()
+                ]
         
         # 生成详细报告
         report = f"""
         ===== 彩票分析报告 [{datetime.now().strftime('%Y-%m-%d %H:%M')}] =====
+        
         数据统计：
         - 总期数：{len(self.df)}
-        - 数据范围：{self.df['date'].min().date()} 至 {self.df['date'].max().date()}
-        - 最新期号：{self.df.iloc[-1]['expect']}
-        - 最新开奖生肖：{self.df.iloc[-1]['zodiac']}
+        - 数据范围：{self.df['date'].min().date()} 至 {last_date}
+        - 最新期号：{last_expect}
+        - 最新开奖生肖：{last_zodiac}
         
-        生肖频率分析：
-        {analysis['frequency'].to_string(index=False)}
+        生肖频率分析（全部历史数据）：
+        {analysis.get('frequency', pd.DataFrame()).to_string(index=False) if 'frequency' in analysis else "无数据"}
         
-        最新开奖生肖转移分析：
-        {transition_detail}
-        
-        季节效应分析：
-        春季: {analysis['seasonal_effect'].loc['春'].nlargest(3).to_dict() if '春' in analysis['seasonal_effect'].index else "无数据"}
-        夏季: {analysis['seasonal_effect'].loc['夏'].nlargest(3).to_dict() if '夏' in analysis['seasonal_effect'].index else "无数据"}
-        秋季: {analysis['seasonal_effect'].loc['秋'].nlargest(3).to_dict() if '秋' in analysis['seasonal_effect'].index else "无数据"}
-        冬季: {analysis['seasonal_effect'].loc['冬'].nlargest(3).to_dict() if '冬' in analysis['seasonal_effect'].index else "无数据"}
+        最新开奖生肖分析：
+        - 生肖: {last_zodiac}
+        - 出现后下期最可能出现的4个生肖: {", ".join(transition_details.get(last_zodiac, ["无数据"]))}
         
         回测结果（最近{BACKTEST_WINDOW}期）：
         - 准确率：{accuracy:.2%}
         - 命中次数：{int(accuracy * BACKTEST_WINDOW)}次
-        - 策略详情：基于当前生肖的历史转移概率
+        - 策略详情：基于上期生肖的转移概率预测
         
         下期预测：
         - 预测期号：{prediction['next_number']}
         - 推荐生肖：{", ".join(prediction['prediction'])}
+        - 预测依据：基于上期生肖 '{last_zodiac}' 的转移概率分析
+        
         =============================================
         """
+        print("分析报告生成完成")
         return report
