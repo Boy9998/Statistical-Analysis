@@ -7,6 +7,47 @@ import holidays
 import re
 from lunarcalendar import Converter, Solar, Lunar  # 精确农历计算
 
+class StrategyManager:
+    """策略管理器，根据回测准确率动态调整预测权重"""
+    def __init__(self):
+        # 初始权重分配
+        self.weights = {
+            'frequency': 0.35,  # 频率权重
+            'transition': 0.35,  # 转移概率权重
+            'season': 0.15,     # 季节权重
+            'festival': 0.15    # 节日权重
+        }
+        self.accuracy_history = []
+        print(f"初始化策略管理器: 权重={self.weights}")
+    
+    def adjust(self, accuracy):
+        """根据准确率动态调整权重"""
+        self.accuracy_history.append(accuracy)
+        
+        # 计算近期准确率趋势 (最近10次)
+        trend = np.mean(self.accuracy_history[-10:]) if len(self.accuracy_history) >= 10 else accuracy
+        
+        # 根据趋势调整权重
+        if trend < 0.35:
+            # 准确率低时增加节日和季节权重
+            self.weights['festival'] = min(0.25, self.weights['festival'] + 0.05)
+            self.weights['season'] = min(0.25, self.weights['season'] + 0.05)
+            self.weights['frequency'] = max(0.25, self.weights['frequency'] - 0.05)
+            self.weights['transition'] = max(0.25, self.weights['transition'] - 0.05)
+            print(f"策略调整: 准确率低({trend:.2f})，增加季节/节日权重")
+        elif trend > 0.45:
+            # 准确率高时增加转移概率权重
+            self.weights['transition'] = min(0.45, self.weights['transition'] + 0.05)
+            self.weights['frequency'] = max(0.25, self.weights['frequency'] - 0.05)
+            print(f"策略调整: 准确率高({trend:.2f})，增加转移概率权重")
+        
+        # 归一化权重
+        total = sum(self.weights.values())
+        for key in self.weights:
+            self.weights[key] = round(self.weights[key] / total, 2)
+        
+        print(f"调整后权重: {self.weights}")
+
 class LotteryAnalyzer:
     def __init__(self):
         """初始化分析器，获取历史数据并处理生肖映射"""
@@ -29,37 +70,22 @@ class LotteryAnalyzer:
             
             self.zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
             
-            # ==== 新增代码：添加农历和节日信息 ====
+            # 添加农历和节日信息
             print("添加农历和节日信息...")
-            # 添加农历日期列
             self.df['lunar'] = self.df['date'].apply(self.get_lunar_date)
-            # 添加节日列
             self.df['festival'] = self.df['date'].apply(self.detect_festival)
-            # 添加季节列
             self.df['season'] = self.df['date'].apply(self.get_season)
-            # ================================
+            
+            # 初始化策略管理器
+            self.strategy_manager = StrategyManager()
             
             # 打印最新开奖信息
             latest = self.df.iloc[-1]
             print(f"最新开奖记录: 期号 {latest['expect']}, 日期 {latest['date'].date()}, 生肖 {latest['zodiac']}")
-            # 打印农历和节日测试
-            print(f"农历测试: {latest['date'].date()} -> {self.get_lunar_date(latest['date'])}")
-            print(f"节日测试: {self.detect_festival(latest['date'])}")
-            
-            # ==== 添加节日识别测试 ====
-            test_dates = [
-                datetime(2023, 1, 22),  # 春节
-                datetime(2023, 9, 29),  # 中秋
-                datetime(2023, 4, 5)    # 清明
-            ]
-            print("\n节日识别测试:")
-            for date in test_dates:
-                festival = self.detect_festival(date)
-                print(f"{date.strftime('%Y-%m-%d')} -> {festival}")
         else:
             print("警告：未获取到任何有效数据")
+            self.strategy_manager = StrategyManager()
     
-    # ==== 新增函数：精确农历计算 ====
     def get_lunar_date(self, dt):
         """精确转换公历到农历"""
         try:
@@ -70,7 +96,6 @@ class LotteryAnalyzer:
             print(f"农历转换错误: {e}, 日期: {dt}")
             return None
     
-    # ==== 新增函数：节日检测 ====
     def detect_festival(self, dt):
         """识别传统节日"""
         lunar = self.get_lunar_date(dt)
@@ -110,7 +135,6 @@ class LotteryAnalyzer:
         
         return "无"
     
-    # ==== 新增函数：季节检测 ====
     def get_season(self, dt):
         """获取季节"""
         month = dt.month
@@ -180,24 +204,14 @@ class LotteryAnalyzer:
             actual = recent.iloc[i+1]['zodiac']
             last_zodiac = train.iloc[-1]['zodiac']
             
-            # 策略：转移概率最高的4个生肖
+            # 策略：使用加权组合预测
             try:
-                # 创建转移矩阵
-                transition = pd.crosstab(
-                    train['zodiac'].shift(-1), 
-                    train['zodiac'], 
-                    normalize=1
-                )
+                # 获取预测
+                prediction = self._generate_prediction(train, last_zodiac, recent.iloc[i+1]['date'])
                 
-                prediction = []
-                if last_zodiac in transition.columns:
-                    # 获取转移概率最高的4个生肖
-                    top_zodiacs = transition[last_zodiac].nlargest(4)
-                    prediction = top_zodiacs.index.tolist()
-                    
-                    # 打印调试信息
-                    if i == len(recent)-2:  # 最新一期
-                        print(f"最新回测预测: 上期生肖={last_zodiac}, 预测生肖={prediction}, 实际生肖={actual}")
+                # 打印调试信息
+                if i == len(recent)-2:  # 最新一期
+                    print(f"最新回测预测: 上期生肖={last_zodiac}, 预测生肖={prediction}, 实际生肖={actual}")
             except Exception as e:
                 print(f"回测过程中出错: {e}")
                 prediction = []
@@ -216,14 +230,72 @@ class LotteryAnalyzer:
             accuracy = result_df['是否命中'].mean()
             hit_count = result_df['是否命中'].sum()
             print(f"回测完成: 准确率={accuracy:.2%}, 命中次数={hit_count}/{len(result_df)}")
+            
+            # 根据回测结果调整策略
+            self.strategy_manager.adjust(accuracy)
         else:
             accuracy = 0.0
             print("回测完成: 无有效结果")
         
         return result_df, accuracy
     
+    def _generate_prediction(self, data, last_zodiac, target_date):
+        """生成预测结果（核心逻辑）"""
+        # 1. 频率分析（基于最近50期）
+        freq_window = data.tail(50) if len(data) >= 50 else data
+        freq_counts = freq_window['zodiac'].value_counts()
+        
+        # 2. 转移概率分析
+        transition = pd.crosstab(
+            data['zodiac'].shift(-1), 
+            data['zodiac'], 
+            normalize=1
+        )
+        
+        # 3. 季节/节日效应
+        season = self.get_season(target_date)
+        festival = self.detect_festival(target_date)
+        
+        season_data = data[data['season'] == season]
+        festival_data = data[data['festival'] == festival]
+        
+        # 组合预测分数
+        scores = {}
+        weights = self.strategy_manager.weights
+        
+        # 应用频率权重
+        for zodiac, count in freq_counts.items():
+            scores[zodiac] = scores.get(zodiac, 0) + count * weights['frequency']
+        
+        # 应用转移概率权重
+        if last_zodiac in transition.columns:
+            for zodiac, prob in transition[last_zodiac].items():
+                scores[zodiac] = scores.get(zodiac, 0) + prob * weights['transition'] * 100
+        
+        # 应用季节权重
+        if not season_data.empty:
+            season_counts = season_data['zodiac'].value_counts()
+            for zodiac, count in season_counts.items():
+                scores[zodiac] = scores.get(zodiac, 0) + count * weights['season']
+        
+        # 应用节日权重
+        if festival != "无" and not festival_data.empty:
+            festival_counts = festival_data['zodiac'].value_counts()
+            for zodiac, count in festival_counts.items():
+                scores[zodiac] = scores.get(zodiac, 0) + count * weights['festival']
+        
+        # 获取得分最高的4-5个生肖
+        if scores:
+            sorted_zodiacs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            prediction = [z for z, _ in sorted_zodiacs[:5]]
+        else:
+            # 备用策略：使用近期高频生肖
+            prediction = freq_counts.head(4).index.tolist()
+        
+        return prediction
+    
     def predict_next(self):
-        """预测下期生肖（严格基于最近200期）"""
+        """预测下期生肖（使用自适应策略）"""
         if self.df.empty:
             print("无法预测 - 数据为空")
             return {
@@ -236,6 +308,10 @@ class LotteryAnalyzer:
         latest = self.df.iloc[-1]
         last_zodiac = latest['zodiac']
         print(f"开始预测下期: 最新生肖={last_zodiac}")
+        print(f"当前策略权重: {self.strategy_manager.weights}")
+        
+        # 预测目标日期（下一天）
+        target_date = latest['date'] + timedelta(days=1)
         
         # 基于最近200期数据
         if len(self.df) < BACKTEST_WINDOW:
@@ -245,36 +321,8 @@ class LotteryAnalyzer:
             print(f"使用最近{BACKTEST_WINDOW}期数据预测")
             recent = self.df.tail(BACKTEST_WINDOW)
         
-        # 策略：转移概率最高的4个生肖
-        try:
-            # 创建转移矩阵
-            transition = pd.crosstab(
-                recent['zodiac'].shift(-1), 
-                recent['zodiac'], 
-                normalize=1
-            )
-            
-            prediction = []
-            if last_zodiac in transition.columns:
-                # 获取转移概率最高的4个生肖
-                top_zodiacs = transition[last_zodiac].nlargest(4)
-                prediction = top_zodiacs.index.tolist()
-                
-                # 打印转移概率详情
-                print(f"转移概率分析: {last_zodiac} → {', '.join([f'{z}({p:.1%})' for z, p in top_zodiacs.items()])}")
-            else:
-                print(f"警告：生肖 '{last_zodiac}' 在转移矩阵中无数据")
-                
-                # 备用策略：使用近期高频生肖
-                top_freq = recent['zodiac'].value_counts().head(4).index.tolist()
-                prediction = top_freq
-                print(f"使用备用策略: 近期高频生肖 - {', '.join(top_freq)}")
-        except Exception as e:
-            print(f"预测过程中出错: {e}")
-            # 默认策略：使用近期高频生肖
-            top_freq = self.df['zodiac'].tail(50).value_counts().head(4).index.tolist()
-            prediction = top_freq
-            print(f"使用备用策略: 近期高频生肖 - {', '.join(top_freq)}")
+        # 生成预测
+        prediction = self._generate_prediction(recent, last_zodiac, target_date)
         
         # 下期期号
         try:
@@ -335,6 +383,12 @@ class LotteryAnalyzer:
         - 最新期号：{last_expect}
         - 最新开奖生肖：{last_zodiac}
         
+        策略权重：
+        - 频率权重: {self.strategy_manager.weights['frequency']}
+        - 转移概率权重: {self.strategy_manager.weights['transition']}
+        - 季节权重: {self.strategy_manager.weights['season']}
+        - 节日权重: {self.strategy_manager.weights['festival']}
+        
         生肖频率分析（全部历史数据）：
         {analysis.get('frequency', pd.DataFrame()).to_string(index=False) if 'frequency' in analysis else "无数据"}
         
@@ -345,12 +399,12 @@ class LotteryAnalyzer:
         回测结果（最近{BACKTEST_WINDOW}期）：
         - 准确率：{accuracy:.2%}
         - 命中次数：{int(accuracy * BACKTEST_WINDOW)}次
-        - 策略详情：基于上期生肖的转移概率预测
+        - 策略详情：自适应权重预测
         
         下期预测：
         - 预测期号：{prediction['next_number']}
         - 推荐生肖：{", ".join(prediction['prediction'])}
-        - 预测依据：基于上期生肖 '{last_zodiac}' 的转移概率分析
+        - 预测依据：基于当前策略权重组合多个因素
         
         =============================================
         """
