@@ -74,7 +74,7 @@ class LotteryAnalyzer:
             # 添加农历和节日信息
             print("添加农历和节日信息...")
             self.df['lunar'] = self.df['date'].apply(self.get_lunar_date)
-            self.df['festival'] = self.df['date'].apply(self.detect_festival)  # 修复拼写错误
+            self.df['festival'] = self.df['date'].apply(self.detect_festival)
             self.df['season'] = self.df['date'].apply(self.get_season)
             
             # 初始化策略管理器
@@ -199,7 +199,8 @@ class LotteryAnalyzer:
                 most_common = max(zodiac_counts.items(), key=lambda x: x[1])
                 patterns['festival_boost'][festival] = most_common[0]
         
-        print(f"检测到模式: {len(patterns['consecutive']}个连续模式, {len(patterns['intervals']}个间隔模式, {len(patterns['festival_boost'])}个节日效应")
+        # 修复的打印语句 - 移除了多余的括号
+        print(f"检测到模式: {len(patterns['consecutive'])}个连续模式, {len(patterns['intervals'])}个间隔模式, {len(patterns['festival_boost'])}个节日效应")
         return patterns
     
     def analyze_zodiac_patterns(self):
