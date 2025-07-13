@@ -5,14 +5,13 @@ from email.mime.text import MIMEText
 import os
 import json
 from datetime import datetime, timedelta
-from config import START_YEAR, CURRENT_YEAR, API_URL, ERROR_LOG_PATH
+from config import START_YEAR, CURRENT_YEAR, API_URL
 import hashlib
 import hmac
 import base64
 import urllib.parse
 import time
 import re
-import csv
 
 def fetch_historical_data():
     """获取2023年至今的真实历史开奖数据"""
@@ -46,50 +45,22 @@ def fetch_historical_data():
                                 valid_data.append(item)
                         except Exception as e:
                             print(f"解析日期错误: {e}，跳过记录: {item}")
-                            log_error({
-                                'error_type': '数据解析错误',
-                                'details': f"解析日期错误: {e}, 记录: {item}"
-                            })
                     else:
                         print(f"记录缺少必要字段，跳过: {item}")
-                        log_error({
-                            'error_type': '数据字段缺失',
-                            'details': f"记录缺少openTime或openCode字段: {item}"
-                        })
                 
                 all_data.extend(valid_data)
                 print(f"已处理 {year} 年数据，有效记录数: {len(valid_data)}")
             else:
                 print(f"警告：{year}年数据格式不符合预期，跳过")
-                log_error({
-                    'error_type': 'API响应格式错误',
-                    'details': f"{year}年API响应格式不符合预期: {json_data}"
-                })
         except requests.exceptions.RequestException as e:
             print(f"网络请求失败: {str(e)}")
-            log_error({
-                'error_type': '网络请求失败',
-                'details': f"获取{year}年数据失败: {str(e)}"
-            })
         except json.JSONDecodeError as e:
             print(f"JSON解析失败: {str(e)}")
-            log_error({
-                'error_type': 'JSON解析失败',
-                'details': f"{year}年数据JSON解析失败: {str(e)}"
-            })
         except Exception as e:
             print(f"获取 {year} 年数据失败: {str(e)}")
-            log_error({
-                'error_type': '数据获取异常',
-                'details': f"获取{year}年数据失败: {str(e)}"
-            })
     
     if not all_data:
         print("错误：没有获取到任何有效数据")
-        log_error({
-            'error_type': '无有效数据',
-            'details': "所有年份数据获取失败"
-        })
         return pd.DataFrame()
     
     print(f"总共获取真实历史记录数: {len(all_data)}")
@@ -111,10 +82,6 @@ def fetch_historical_data():
         df['special'] = df['openCode'].str.split(',').str[-1].astype(int)
     except Exception as e:
         print(f"解析特别号码失败: {e}")
-        log_error({
-            'error_type': '数据处理错误',
-            'details': f"解析特别号码失败: {e}"
-        })
         df['special'] = 0  # 默认值
     
     return df.sort_values('date').reset_index(drop=True)
@@ -219,17 +186,9 @@ def send_dingtalk(message, webhook):
             return True
         else:
             print(f"钉钉通知发送失败: {response.status_code}")
-            log_error({
-                'error_type': '通知发送失败',
-                'details': f"钉钉通知失败: {response.status_code}, {response.text}"
-            })
             return False
     except Exception as e:
         print(f"钉钉通知发送异常: {e}")
-        log_error({
-            'error_type': '通知发送异常',
-            'details': f"钉钉通知异常: {str(e)}"
-        })
         return False
 
 def send_email(subject, content, receiver):
@@ -259,89 +218,17 @@ def send_email(subject, content, receiver):
         print("邮件发送成功")
         return True
     except smtplib.SMTPAuthenticationError:
-        error_msg = "邮件发送失败: 认证失败，请检查邮箱和授权码"
-        print(error_msg)
-        log_error({
-            'error_type': '邮件认证失败',
-            'details': error_msg
-        })
+        print("邮件发送失败: 认证失败，请检查邮箱和授权码")
     except smtplib.SMTPException as e:
-        error_msg = f"邮件发送失败: SMTP错误 - {e}"
-        print(error_msg)
-        log_error({
-            'error_type': 'SMTP错误',
-            'details': error_msg
-        })
+        print(f"邮件发送失败: SMTP错误 - {e}")
     except Exception as e:
-        error_msg = f"邮件发送失败: {e}"
-        print(error_msg)
-        log_error({
-            'error_type': '邮件发送异常',
-            'details': error_msg
-        })
+        print(f"邮件发送失败: {e}")
     
     return False
-
-def log_error(error_data):
-    """记录错误到CSV文件"""
-    try:
-        # 确保目录存在
-        os.makedirs(os.path.dirname(ERROR_LOG_PATH), exist_ok=True)
-        
-        # 添加时间戳
-        error_data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
-        # 字段定义
-        fieldnames = [
-            'timestamp', 'error_type', 'details',
-            'draw_number', 'date', 'actual_zodiac', 
-            'predicted_zodiacs', 'last_zodiac', 
-            'weekday', 'month'
-        ]
-        
-        # 写入文件
-        file_exists = os.path.isfile(ERROR_LOG_PATH)
-        
-        with open(ERROR_LOG_PATH, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            if not file_exists:
-                writer.writeheader()
-            
-            # 确保只包含定义的字段
-            filtered_data = {k: v for k, v in error_data.items() if k in fieldnames}
-            writer.writerow(filtered_data)
-        
-        # 打印错误信息
-        error_type = error_data.get('error_type', '未知错误')
-        print(f"错误已记录: {error_type}")
-        
-    except Exception as e:
-        print(f"错误日志记录失败: {str(e)}")
-        # 如果日志记录失败，尝试打印错误信息
-        print(f"原始错误数据: {error_data}")
 
 # 测试代码
 if __name__ == "__main__":
     print("===== 测试 utils 模块 =====")
-    
-    # 测试错误日志记录
-    print("\n测试错误日志记录功能...")
-    test_errors = [
-        {'error_type': '测试错误1', 'details': '这是第一个测试错误'},
-        {'error_type': '测试错误2', 'details': '这是第二个测试错误', 'draw_number': '2023001'},
-        {'error_type': '预测错误', 'actual_zodiac': '龙', 'predicted_zodiacs': '兔,虎,牛', 'last_zodiac': '狗'}
-    ]
-    
-    for error in test_errors:
-        log_error(error)
-    
-    # 读取并显示日志
-    if os.path.exists(ERROR_LOG_PATH):
-        print("\n错误日志内容:")
-        with open(ERROR_LOG_PATH, 'r', encoding='utf-8') as f:
-            print(f.read())
-    else:
-        print("\n错误日志文件未创建")
     
     # 测试数据获取
     print("\n测试数据获取功能...")
