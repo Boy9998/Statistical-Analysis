@@ -14,11 +14,7 @@ import time
 import re
 
 def fetch_historical_data():
-    """
-    获取2023年至今的真实历史开奖数据
-    要求2: 使用API接口: https://history.macaumarksix.com/history/macaujc2/y/${year}
-    要求3: 获取2023年至今的最新历史数据
-    """
+    """获取2023年至今的真实历史开奖数据"""
     all_data = []
     current_year = datetime.now().year
     today = datetime.now().date()
@@ -35,7 +31,8 @@ def fetch_historical_data():
             
             # 检查数据结构是否符合要求
             if 'data' in json_data and isinstance(json_data['data'], list):
-                print(f"获取到 {year} 年数据，原始记录数: {len(json_data['data']}")
+                # 修复语法错误：添加了缺失的右括号
+                print(f"获取到 {year} 年数据，原始记录数: {len(json_data['data'])}")
                 
                 # 过滤有效数据（确保有openTime和openCode）
                 valid_data = []
@@ -92,7 +89,9 @@ def fetch_historical_data():
 def zodiac_mapping(number, year):
     """
     根据年份动态映射生肖
-    要求: 使用每年不同的生肖映射规则
+    2023年生肖号码参照表
+    2024年生肖号码参照表
+    2025年生肖号码参照表
     """
     # 每年生肖映射规则
     zodiac_rules = {
@@ -141,11 +140,7 @@ def zodiac_mapping(number, year):
     }
     
     # 获取对应年份的映射规则
-    if year in zodiac_rules:
-        year_rules = zodiac_rules[year]
-    else:
-        # 使用最新年份规则作为默认
-        year_rules = zodiac_rules[2025]
+    year_rules = zodiac_rules.get(year, zodiac_rules[2025])
     
     # 查找号码对应的生肖
     for zodiac, numbers in year_rules.items():
@@ -156,10 +151,7 @@ def zodiac_mapping(number, year):
     return "未知"
 
 def send_dingtalk(message, webhook):
-    """
-    发送钉钉通知（支持加签验证）
-    要求1: 钉钉通知功能
-    """
+    """发送钉钉通知（支持加签验证）"""
     secret = os.getenv("DINGTALK_SECRET")
     if not secret:
         print("钉钉密钥未设置，跳过通知")
@@ -200,10 +192,7 @@ def send_dingtalk(message, webhook):
         return False
 
 def send_email(subject, content, receiver):
-    """
-    发送邮件通知
-    要求1: QQ邮箱通知功能
-    """
+    """发送邮件通知"""
     sender = os.getenv("EMAIL_USER")
     password = os.getenv("EMAIL_PWD")
     
@@ -247,7 +236,7 @@ if __name__ == "__main__":
     if not test_df.empty:
         print(f"获取到 {len(test_df)} 条记录")
         print("前5条记录:")
-        print(test_df[['date', 'expect', 'openCode', 'special']].head())
+        print(test_df[['date', 'openCode', 'special']].head())
     else:
         print("数据获取失败")
     
@@ -255,12 +244,10 @@ if __name__ == "__main__":
     print("\n测试生肖映射功能...")
     test_numbers = [1, 12, 13, 25, 37, 49]
     test_years = [2023, 2024, 2025]
-    
     for year in test_years:
         print(f"\n{year}年生肖映射:")
         for num in test_numbers:
-            zodiac = zodiac_mapping(num, year)
-            print(f"号码 {num} -> 生肖: {zodiac}")
+            print(f"号码 {num} -> 生肖: {zodiac_mapping(num, year)}")
     
     # 测试通知功能（需要设置环境变量）
     print("\n测试通知功能...")
