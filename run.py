@@ -1,12 +1,19 @@
 import os
 import sys
+from datetime import datetime  # Added missing import
+import traceback  # Added for better error handling
 
 # 确保正确导入路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.analysis import LotteryAnalyzer
-from src.utils import send_dingtalk, send_email
-from src.data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
+from src.utils import send_dingtalk, send_email, fetch_historical_data  # Added fetch_historical_data
+from src.data_processor import (
+    add_temporal_features, 
+    add_lunar_features, 
+    add_festival_features, 
+    add_season_features
+)
 
 def main():
     print("=" * 50)
@@ -17,6 +24,9 @@ def main():
         # 1. 数据获取
         print("获取历史数据...")
         df = fetch_historical_data()
+        
+        if df.empty:
+            raise ValueError("获取到的数据为空，请检查API连接")
         
         # 2. 数据预处理和特征工程
         print("添加时序特征...")
@@ -32,6 +42,7 @@ def main():
         df = add_season_features(df)
         
         # 3. 创建分析器
+        print("初始化分析器...")
         analyzer = LotteryAnalyzer()
         analyzer.df = df  # 传入处理后的数据
         
@@ -40,6 +51,7 @@ def main():
         backtest_results, accuracy = analyzer.backtest_strategy()
         
         # 5. 策略调整
+        print("调整策略权重...")
         analyzer.strategy_manager.adjust(accuracy)
         
         # 6. 预测下期
@@ -47,6 +59,7 @@ def main():
         prediction = analyzer.predict_next()
         
         # 7. 生成报告
+        print("生成分析报告...")
         report = analyzer.generate_report()
         
         # 8. 发送通知
@@ -64,18 +77,19 @@ def main():
         print("分析完成，报告已发送")
         
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        print(f"系统运行失败: {error_details}")
+        error_msg = f"系统运行失败: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        
+        # 记录错误日志
         from src.utils import log_error
         log_error({
             'error_type': '系统运行异常',
-            'details': f"主程序异常: {str(e)}\n{error_details}"
+            'details': error_msg
         })
+        
         sys.exit(1)
     
     sys.exit(0)
 
-# 测试代码
 if __name__ == "__main__":
     main()
