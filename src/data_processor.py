@@ -39,6 +39,7 @@ def add_lunar_features(df):
     # 计算农历日期
     df['lunar_date'] = df['date'].apply(
         lambda d: Converter.Solar2Lunar(Solar(d.year, d.month, d.day))
+    )
     
     # 提取农历月份和日期
     df['lunar_month'] = df['lunar_date'].apply(lambda x: x.month)
