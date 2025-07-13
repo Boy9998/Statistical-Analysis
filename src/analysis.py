@@ -45,6 +45,17 @@ class LotteryAnalyzer:
             # 打印农历和节日测试
             print(f"农历测试: {latest['date'].date()} -> {self.get_lunar_date(latest['date'])}")
             print(f"节日测试: {self.detect_festival(latest['date'])}")
+            
+            # ==== 添加节日识别测试 ====
+            test_dates = [
+                datetime(2023, 1, 22),  # 春节
+                datetime(2023, 9, 29),  # 中秋
+                datetime(2023, 4, 5)    # 清明
+            ]
+            print("\n节日识别测试:")
+            for date in test_dates:
+                festival = self.detect_festival(date)
+                print(f"{date.strftime('%Y-%m-%d')} -> {festival}")
         else:
             print("警告：未获取到任何有效数据")
     
