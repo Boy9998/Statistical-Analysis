@@ -5,6 +5,7 @@ from config import BACKTEST_WINDOW
 from datetime import datetime, timedelta
 import holidays
 import re
+from lunarcalendar import Converter, Solar, Lunar  # 精确农历计算
 
 class LotteryAnalyzer:
     def __init__(self):
@@ -28,11 +29,88 @@ class LotteryAnalyzer:
             
             self.zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
             
+            # ==== 新增代码：添加农历和节日信息 ====
+            print("添加农历和节日信息...")
+            # 添加农历日期列
+            self.df['lunar'] = self.df['date'].apply(self.get_lunar_date)
+            # 添加节日列
+            self.df['festival'] = self.df['date'].apply(self.detect_festival)
+            # 添加季节列
+            self.df['season'] = self.df['date'].apply(self.get_season)
+            # ================================
+            
             # 打印最新开奖信息
             latest = self.df.iloc[-1]
             print(f"最新开奖记录: 期号 {latest['expect']}, 日期 {latest['date'].date()}, 生肖 {latest['zodiac']}")
+            # 打印农历和节日测试
+            print(f"农历测试: {latest['date'].date()} -> {self.get_lunar_date(latest['date'])}")
+            print(f"节日测试: {self.detect_festival(latest['date'])}")
         else:
             print("警告：未获取到任何有效数据")
+    
+    # ==== 新增函数：精确农历计算 ====
+    def get_lunar_date(self, dt):
+        """精确转换公历到农历"""
+        try:
+            solar = Solar(dt.year, dt.month, dt.day)
+            lunar = Converter.Solar2Lunar(solar)
+            return lunar
+        except Exception as e:
+            print(f"农历转换错误: {e}, 日期: {dt}")
+            return None
+    
+    # ==== 新增函数：节日检测 ====
+    def detect_festival(self, dt):
+        """识别传统节日"""
+        lunar = self.get_lunar_date(dt)
+        if not lunar:
+            return "无"
+        
+        lunar_date = (lunar.month, lunar.day)
+        solar_date = (dt.month, dt.day)
+        
+        # 农历节日映射
+        lunar_festivals = {
+            (1, 1): "春节",
+            (1, 15): "元宵",
+            (5, 5): "端午",
+            (7, 7): "七夕",
+            (7, 15): "中元",
+            (8, 15): "中秋",
+            (9, 9): "重阳"
+        }
+        
+        # 公历节日映射
+        solar_festivals = {
+            (4, 4): "清明",
+            (4, 5): "清明",
+            (12, 22): "冬至"
+        }
+        
+        # 春节范围：农历正月初一至十五
+        if lunar.month == 1 and 1 <= lunar.day <= 15:
+            return "春节"
+        
+        # 精确匹配
+        if lunar_date in lunar_festivals:
+            return lunar_festivals[lunar_date]
+        if solar_date in solar_festivals:
+            return solar_festivals[solar_date]
+        
+        return "无"
+    
+    # ==== 新增函数：季节检测 ====
+    def get_season(self, dt):
+        """获取季节"""
+        month = dt.month
+        if 3 <= month <= 5:
+            return "春"
+        elif 6 <= month <= 8:
+            return "夏"
+        elif 9 <= month <= 11:
+            return "秋"
+        else:
+            return "冬"
     
     def analyze_zodiac_patterns(self):
         """分析生肖出现规律"""
