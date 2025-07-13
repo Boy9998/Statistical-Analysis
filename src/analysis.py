@@ -485,7 +485,7 @@ class LotteryAnalyzer:
         
         # 生成详细报告
         report = f"""
-        ===== 彩票分析报告 [{datetime.now().strftime('%Y-%m-%d %H:%M')}] =====
+        ===== 每日彩报 [{datetime.now().strftime('%Y-%m-%d %H:%M')}] =====
         
         数据统计：
         - 总期数：{len(self.df)}
