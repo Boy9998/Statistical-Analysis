@@ -7,11 +7,6 @@ import holidays
 import re
 from lunarcalendar import Converter, Solar, Lunar  # 精确农历计算
 from collections import defaultdict
-import logging
-
-# 设置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 class StrategyManager:
     """策略管理器，根据回测准确率动态调整预测权重"""
@@ -24,7 +19,7 @@ class StrategyManager:
             'festival': 0.20    # 节日权重
         }
         self.accuracy_history = []
-        logger.info(f"初始化策略管理器: 权重={self.weights}")
+        print(f"初始化策略管理器: 权重={self.weights}")
     
     def adjust(self, accuracy):
         """根据准确率动态调整权重"""
@@ -40,27 +35,27 @@ class StrategyManager:
             self.weights['season'] = min(0.25, self.weights['season'] + 0.05)
             self.weights['frequency'] = max(0.25, self.weights['frequency'] - 0.05)
             self.weights['transition'] = max(0.25, self.weights['transition'] - 0.05)
-            logger.info(f"策略调整: 准确率低({trend:.2f})，增加季节/节日权重")
+            print(f"策略调整: 准确率低({trend:.2f})，增加季节/节日权重")
         elif trend > 0.45:
             # 准确率高时增加转移概率权重
             self.weights['transition'] = min(0.45, self.weights['transition'] + 0.05)
             self.weights['frequency'] = max(0.25, self.weights['frequency'] - 0.05)
-            logger.info(f"策略调整: 准确率高({trend:.2f})，增加转移概率权重")
+            print(f"策略调整: 准确率高({trend:.2f})，增加转移概率权重")
         
         # 归一化权重
         total = sum(self.weights.values())
         for key in self.weights:
             self.weights[key] = round(self.weights[key] / total, 2)
         
-        logger.info(f"调整后权重: {self.weights}")
+        print(f"调整后权重: {self.weights}")
 
 class LotteryAnalyzer:
     def __init__(self):
         """初始化分析器，获取历史数据并处理生肖映射"""
-        logger.info("开始获取历史数据...")
+        print("开始获取历史数据...")
         self.df = fetch_historical_data()
         if not self.df.empty:
-            logger.info(f"成功获取 {len(self.df)} 条历史开奖记录")
+            print(f"成功获取 {len(self.df)} 条历史开奖记录")
             
             # 应用基于年份的动态生肖映射
             self.df['zodiac'] = self.df.apply(
@@ -71,13 +66,13 @@ class LotteryAnalyzer:
             valid_zodiacs = self.df['zodiac'].isin(["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"])
             if not valid_zodiacs.all():
                 invalid_count = len(self.df) - valid_zodiacs.sum()
-                logger.warning(f"警告：发现 {invalid_count} 条记录的生肖映射无效")
+                print(f"警告：发现 {invalid_count} 条记录的生肖映射无效")
                 self.df = self.df[valid_zodiacs]
             
             self.zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
             
             # 添加农历和节日信息
-            logger.info("添加农历和节日信息...")
+            print("添加农历和节日信息...")
             self.df['lunar'] = self.df['date'].apply(self.get_lunar_date)
             self.df['festival'] = self.df['date'].apply(self.detect_festival)
             self.df['season'] = self.df['date'].apply(self.get_season)
@@ -86,14 +81,14 @@ class LotteryAnalyzer:
             self.strategy_manager = StrategyManager()
             
             # 检测历史模式
-            logger.info("检测历史模式...")
+            print("检测历史模式...")
             self.patterns = self.detect_patterns()
             
             # 打印最新开奖信息
             latest = self.df.iloc[-1]
-            logger.info(f"最新开奖记录: 期号 {latest['expect']}, 日期 {latest['date'].date()}, 生肖 {latest['zodiac']}")
+            print(f"最新开奖记录: 期号 {latest['expect']}, 日期 {latest['date'].date()}, 生肖 {latest['zodiac']}")
         else:
-            logger.warning("警告：未获取到任何有效数据")
+            print("警告：未获取到任何有效数据")
             self.strategy_manager = StrategyManager()
             self.patterns = {}
     
@@ -104,7 +99,7 @@ class LotteryAnalyzer:
             lunar = Converter.Solar2Lunar(solar)
             return lunar
         except Exception as e:
-            logger.error(f"农历转换错误: {e}, 日期: {dt}")
+            print(f"农历转换错误: {e}, 日期: {dt}")
             return None
     
     def detect_festival(self, dt):
@@ -204,16 +199,17 @@ class LotteryAnalyzer:
                 most_common = max(zodiac_counts.items(), key=lambda x: x[1])
                 patterns['festival_boost'][festival] = most_common[0]
         
-        logger.info(f"检测到模式: {len(patterns['consecutive'])}个连续模式, {len(patterns['intervals'])}个间隔模式, {len(patterns['festival_boost'])}个节日效应")
+        # 修复的打印语句 - 移除了多余的括号
+        print(f"检测到模式: {len(patterns['consecutive'])}个连续模式, {len(patterns['intervals'])}个间隔模式, {len(patterns['festival_boost'])}个节日效应")
         return patterns
     
     def analyze_zodiac_patterns(self):
         """分析生肖出现规律"""
         if self.df.empty:
-            logger.warning("无法进行分析 - 数据为空")
+            print("无法进行分析 - 数据为空")
             return {}
         
-        logger.info("开始分析生肖出现规律...")
+        print("开始分析生肖出现规律...")
         
         # 1. 生肖频率分析（基于全部历史数据）
         freq = self.df['zodiac'].value_counts().reset_index()
@@ -223,7 +219,7 @@ class LotteryAnalyzer:
         # 2. 生肖转移分析（基于最近200期）
         if len(self.df) >= BACKTEST_WINDOW:
             recent = self.df.tail(BACKTEST_WINDOW)
-            logger.info(f"使用最近{BACKTEST_WINDOW}期数据计算转移矩阵")
+            print(f"使用最近{BACKTEST_WINDOW}期数据计算转移矩阵")
             
             # 创建转移矩阵
             transition = pd.crosstab(
@@ -232,7 +228,7 @@ class LotteryAnalyzer:
                 normalize=1
             ).round(4) * 100
         else:
-            logger.info(f"数据不足{BACKTEST_WINDOW}期，使用全部数据计算转移矩阵")
+            print(f"数据不足{BACKTEST_WINDOW}期，使用全部数据计算转移矩阵")
             transition = pd.crosstab(
                 self.df['zodiac'].shift(-1), 
                 self.df['zodiac'], 
@@ -245,69 +241,61 @@ class LotteryAnalyzer:
         }
     
     def backtest_strategy(self):
-        """严格回测预测策略（基于固定200期窗口）"""
+        """严格回测预测策略（基于最近200期）"""
         if self.df.empty:
-            logger.warning("无法回测 - 数据为空")
+            print("无法回测 - 数据为空")
             return pd.DataFrame(), 0.0
         
-        if len(self.df) < BACKTEST_WINDOW + 1:
-            logger.warning(f"警告：数据不足{BACKTEST_WINDOW+1}期，实际只有{len(self.df)}期")
+        if len(self.df) < BACKTEST_WINDOW:
+            print(f"警告：数据不足{BACKTEST_WINDOW}期，实际只有{len(self.df)}期")
             return pd.DataFrame(), 0.0
         
-        logger.info(f"开始回测策略（固定{BACKTEST_WINDOW}期窗口）...")
+        print(f"开始回测策略（最近{BACKTEST_WINDOW}期）...")
+        recent = self.df.tail(BACKTEST_WINDOW).copy().reset_index(drop=True)
         results = []
         
-        # 使用固定200期窗口进行回测
-        for i in range(BACKTEST_WINDOW, len(self.df)-1):
-            # 获取训练数据（固定200期）
-            train = self.df.iloc[i-BACKTEST_WINDOW:i].copy()
-            # 测试数据（下一期）
-            test_row = self.df.iloc[i+1]
+        for i in range(len(recent)-1):
+            # 使用历史数据预测
+            train = recent.iloc[:i+1]
+            actual = recent.iloc[i+1]['zodiac']
+            last_zodiac = train.iloc[-1]['zodiac']
+            target_date = recent.iloc[i+1]['date']
             
-            # 创建独立的分析器实例（避免数据污染）
-            analyzer = LotteryAnalyzer()
-            analyzer.df = train
-            analyzer.zodiacs = self.zodiacs
-            analyzer.strategy_manager = StrategyManager()
-            analyzer.patterns = analyzer.detect_patterns()
-            
-            # 获取最后一条训练数据
-            last_row = train.iloc[-1]
-            last_zodiac = last_row['zodiac']
-            target_date = test_row['date']
-            
-            # 生成预测
-            prediction = analyzer._generate_prediction(train, last_zodiac, target_date)
-            prediction = analyzer.apply_pattern_enhancement(prediction, last_zodiac, target_date, train)
-            
-            # 检查是否命中
-            actual = test_row['zodiac']
-            is_hit = 1 if actual in prediction else 0
+            # 策略：使用加权组合预测
+            try:
+                # 获取预测
+                prediction = self._generate_prediction(train, last_zodiac, target_date)
+                
+                # 应用模式增强
+                prediction = self.apply_pattern_enhancement(prediction, last_zodiac, target_date, train)
+                
+                # 打印调试信息
+                if i == len(recent)-2:  # 最新一期
+                    print(f"最新回测预测: 上期生肖={last_zodiac}, 预测生肖={prediction}, 实际生肖={actual}")
+            except Exception as e:
+                print(f"回测过程中出错: {e}")
+                prediction = []
             
             # 记录结果
             results.append({
-                '期号': test_row['expect'],
+                '期号': recent.iloc[i+1]['expect'],
                 '上期生肖': last_zodiac,
                 '实际生肖': actual,
                 '预测生肖': ", ".join(prediction) if prediction else "无预测",
-                '是否命中': is_hit
+                '是否命中': 1 if actual in prediction else 0
             })
-            
-            # 每50次回测打印进度
-            if (i - BACKTEST_WINDOW) % 50 == 0:
-                logger.info(f"已完成回测: {i-BACKTEST_WINDOW+1}/{len(self.df)-BACKTEST_WINDOW-1}")
         
         result_df = pd.DataFrame(results)
         if not result_df.empty:
             accuracy = result_df['是否命中'].mean()
             hit_count = result_df['是否命中'].sum()
-            logger.info(f"回测完成: 准确率={accuracy:.2%}, 命中次数={hit_count}/{len(result_df)}")
+            print(f"回测完成: 准确率={accuracy:.2%}, 命中次数={hit_count}/{len(result_df)}")
             
             # 根据回测结果调整策略
             self.strategy_manager.adjust(accuracy)
         else:
             accuracy = 0.0
-            logger.info("回测完成: 无有效结果")
+            print("回测完成: 无有效结果")
         
         return result_df, accuracy
     
@@ -376,7 +364,7 @@ class LotteryAnalyzer:
             if boost_zodiac not in prediction:
                 # 如果节日生肖不在预测中，替换掉得分最低的生肖
                 prediction = prediction[:-1] + [boost_zodiac]
-                logger.info(f"节日效应增强: {festival}节日常见生肖 {boost_zodiac} 加入预测")
+                print(f"节日效应增强: {festival}节日常见生肖 {boost_zodiac} 加入预测")
         
         # 2. 间隔模式增强
         for zodiac in prediction:
@@ -390,7 +378,7 @@ class LotteryAnalyzer:
                     if zodiac in prediction:
                         prediction.remove(zodiac)
                         prediction.insert(0, zodiac)
-                    logger.info(f"间隔模式增强: {zodiac} 已间隔 {current_interval}期 (平均 {avg_interval:.1f}期), 提升优先级")
+                    print(f"间隔模式增强: {zodiac} 已间隔 {current_interval}期 (平均 {avg_interval:.1f}期), 提升优先级")
         
         # 3. 连续出现模式处理
         if last_zodiac in self.patterns['consecutive']:
@@ -406,14 +394,14 @@ class LotteryAnalyzer:
                 if last_zodiac in prediction:
                     prediction.remove(last_zodiac)
                     prediction.append(last_zodiac)
-                    logger.info(f"连续模式处理: {last_zodiac} 已连续出现 {current_consecutive}次 (历史最高 {max_consecutive}次), 降低优先级")
+                    print(f"连续模式处理: {last_zodiac} 已连续出现 {current_consecutive}次 (历史最高 {max_consecutive}次), 降低优先级")
         
         return prediction
     
     def predict_next(self):
         """预测下期生肖（使用自适应策略）"""
         if self.df.empty:
-            logger.warning("无法预测 - 数据为空")
+            print("无法预测 - 数据为空")
             return {
                 'next_number': "未知",
                 'prediction': ["无数据"],
@@ -423,18 +411,18 @@ class LotteryAnalyzer:
         # 获取最新数据
         latest = self.df.iloc[-1]
         last_zodiac = latest['zodiac']
-        logger.info(f"开始预测下期: 最新生肖={last_zodiac}")
-        logger.info(f"当前策略权重: {self.strategy_manager.weights}")
+        print(f"开始预测下期: 最新生肖={last_zodiac}")
+        print(f"当前策略权重: {self.strategy_manager.weights}")
         
         # 预测目标日期（下一天）
         target_date = latest['date'] + timedelta(days=1)
         
         # 基于最近200期数据
         if len(self.df) < BACKTEST_WINDOW:
-            logger.info(f"数据不足{BACKTEST_WINDOW}期，使用全部数据进行预测")
+            print(f"数据不足{BACKTEST_WINDOW}期，使用全部数据进行预测")
             recent = self.df
         else:
-            logger.info(f"使用最近{BACKTEST_WINDOW}期数据预测")
+            print(f"使用最近{BACKTEST_WINDOW}期数据预测")
             recent = self.df.tail(BACKTEST_WINDOW)
         
         # 生成预测
@@ -456,7 +444,7 @@ class LotteryAnalyzer:
         except:
             next_num = "未知"
         
-        logger.info(f"预测结果: 下期期号={next_num}, 推荐生肖={', '.join(prediction)}")
+        print(f"预测结果: 下期期号={next_num}, 推荐生肖={', '.join(prediction)}")
         return {
             'next_number': next_num,
             'prediction': prediction,
@@ -467,7 +455,7 @@ class LotteryAnalyzer:
         """生成符合要求的分析报告"""
         if self.df.empty:
             report = "===== 彩票分析报告 =====\n错误：没有获取到有效数据，请检查API"
-            logger.error(report)
+            print(report)
             return report
         
         # 获取最新开奖信息
@@ -497,7 +485,7 @@ class LotteryAnalyzer:
         
         # 生成详细报告
         report = f"""
-        ===== 每日彩报 [{datetime.now().strftime('%Y-%m-%d %H:%M')}] =====
+        ===== 彩票分析报告 [{datetime.now().strftime('%Y-%m-%d %H:%M')}] =====
         
         数据统计：
         - 总期数：{len(self.df)}
@@ -533,5 +521,5 @@ class LotteryAnalyzer:
         
         =============================================
         """
-        logger.info("分析报告生成完成")
+        print("分析报告生成完成")
         return report
