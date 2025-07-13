@@ -11,19 +11,67 @@ import hmac
 import base64
 import urllib.parse
 import time
+import numpy as np
+
+# 生肖映射表（每年不同）
+ZODIAC_MAPS = {
+    2023: {
+        "兔": [1, 13, 25, 37, 49],
+        "虎": [2, 14, 26, 38],
+        "牛": [3, 15, 27, 39],
+        "鼠": [4, 16, 28, 40],
+        "猪": [5, 17, 29, 41],
+        "狗": [6, 18, 30, 42],
+        "鸡": [7, 19, 31, 43],
+        "猴": [8, 20, 32, 44],
+        "羊": [9, 21, 33, 45],
+        "马": [10, 22, 34, 46],
+        "蛇": [11, 23, 35, 47],
+        "龙": [12, 24, 36, 48]
+    },
+    2024: {
+        "龙": [1, 13, 25, 37, 49],
+        "兔": [2, 14, 26, 38],
+        "虎": [3, 15, 27, 39],
+        "牛": [4, 16, 28, 40],
+        "鼠": [5, 17, 29, 41],
+        "猪": [6, 18, 30, 42],
+        "狗": [7, 19, 31, 43],
+        "鸡": [8, 20, 32, 44],
+        "猴": [9, 21, 33, 45],
+        "羊": [10, 22, 34, 46],
+        "马": [11, 23, 35, 47],
+        "蛇": [12, 24, 36, 48]
+    },
+    2025: {
+        "蛇": [1, 13, 25, 37, 49],
+        "龙": [2, 14, 26, 38],
+        "兔": [3, 15, 27, 39],
+        "虎": [4, 16, 28, 40],
+        "牛": [5, 17, 29, 41],
+        "鼠": [6, 18, 30, 42],
+        "猪": [7, 19, 31, 43],
+        "狗": [8, 20, 32, 44],
+        "鸡": [9, 21, 33, 45],
+        "猴": [10, 22, 34, 46],
+        "羊": [11, 23, 35, 47],
+        "马": [12, 24, 36, 48]
+    }
+}
 
 def fetch_historical_data():
     """
-    获取2023年至今的历史开奖数据（严格符合要求）
+    获取2023年至今的历史开奖数据（严格过滤）
     要求2: 使用API接口: https://history.macaumarksix.com/history/macaujc2/y/${year}
     要求3: 获取2023年至今的最新历史数据
     """
     all_data = []
-    current_year = datetime.now().year
+    current_date = datetime.now().date()
     
     print(f"开始获取历史数据: {START_YEAR}年至今...")
+    print(f"当前日期: {current_date}")
     
-    for year in range(START_YEAR, current_year + 1):
+    for year in range(START_YEAR, int(CURRENT_YEAR) + 1):
         url = f"{API_URL}{year}"
         try:
             print(f"请求API: {url}")
@@ -40,9 +88,9 @@ def fetch_historical_data():
                 for item in json_data['data']:
                     if 'openTime' in item and 'openCode' in item:
                         try:
-                            # 解析日期并检查年份
+                            # 解析日期并检查是否已开奖
                             open_time = datetime.strptime(item['openTime'], '%Y-%m-%d %H:%M:%S')
-                            if open_time.year >= 2023:
+                            if open_time.date() <= current_date:
                                 valid_data.append(item)
                         except Exception as e:
                             print(f"解析日期错误: {e}，跳过记录: {item}")
@@ -74,7 +122,6 @@ def fetch_historical_data():
     df['year'] = df['date'].dt.year
     df['month'] = df['date'].dt.month
     df['day'] = df['date'].dt.day
-    df['day_of_year'] = df['date'].dt.dayofyear  # 确保创建day_of_year列
     
     # 解析特别号码 - 取开奖号码最后一位
     try:
@@ -83,22 +130,25 @@ def fetch_historical_data():
         print(f"解析特别号码失败: {e}")
         df['special'] = 0  # 默认值
     
-    # 过滤掉2023年之前的数据（确保严格符合要求）
-    df = df[df['year'] >= 2023]
-    
-    print(f"最终数据量: {len(df)} 条记录")
     return df.sort_values('date').reset_index(drop=True)
 
-def zodiac_mapping(number):
+def zodiac_mapping(number, year):
     """
-    将号码映射到生肖 (1-49 映射到 12 生肖)
+    将号码映射到生肖 (动态年份映射)
     要求10: 只分析特别号码位置的生肖
     """
-    zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
-    try:
+    if year not in ZODIAC_MAPS:
+        print(f"警告: {year}年无生肖映射表，使用默认映射")
+        zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
         return zodiacs[(number - 1) % 12]
-    except:
-        return "未知"
+    
+    for animal, numbers in ZODIAC_MAPS[year].items():
+        if number in numbers:
+            return animal
+    
+    # 如果未找到，使用默认计算
+    zodiacs = list(ZODIAC_MAPS[year].keys())
+    return zodiacs[(number - 1) % 12]
 
 def send_dingtalk(message, webhook):
     """
@@ -199,8 +249,11 @@ if __name__ == "__main__":
     # 测试生肖映射
     print("\n测试生肖映射功能...")
     test_numbers = [1, 12, 13, 25, 37, 49]
-    for num in test_numbers:
-        print(f"号码 {num} -> 生肖: {zodiac_mapping(num)}")
+    test_years = [2023, 2024, 2025]
+    for year in test_years:
+        print(f"\n{year}年生肖映射:")
+        for num in test_numbers:
+            print(f"号码 {num} -> 生肖: {zodiac_mapping(num, year)}")
     
     # 测试通知功能（需要设置环境变量）
     print("\n测试通知功能...")
