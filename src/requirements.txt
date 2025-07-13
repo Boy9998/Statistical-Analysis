@@ -1,3 +1,4 @@
+# 文件位置: src/requirements.txt
 requests==2.31.0
 pandas==2.0.3
 numpy==1.24.4
@@ -6,3 +7,4 @@ beautifulsoup4==4.12.3
 scikit-learn==1.3.2
 holidays==0.36
 scipy==1.10.1
+lunarcalendar==0.0.9  # 新增精确农历计算库
