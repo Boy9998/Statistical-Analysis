@@ -11,6 +11,7 @@ BACKTEST_WINDOW = 200  # 回测期数
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 MODEL_DIR = os.path.join(BASE_DIR, 'models')
+ML_MODEL_PATH = MODEL_DIR  # 添加ML_MODEL_PATH定义
 
 # ==================== 文件配置 ====================
 ERROR_LOG_PATH = os.path.join(DATA_DIR, 'error_log.csv')
@@ -41,6 +42,7 @@ if __name__ == "__main__":
     print("\n[路径配置]")
     print(f"数据目录: {DATA_DIR}")
     print(f"模型目录: {MODEL_DIR}")
+    print(f"ML模型路径: {ML_MODEL_PATH}")  # 添加ML_MODEL_PATH显示
     
     print("\n[文件配置]")
     print(f"错误日志路径: {ERROR_LOG_PATH}")
