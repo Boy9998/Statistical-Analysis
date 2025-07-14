@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from lunarcalendar import Converter, Solar
 from datetime import datetime
 
@@ -102,19 +103,88 @@ def add_season_features(df):
     print(f"已添加季节特征")
     return df
 
+def add_rolling_features(df):
+    """
+    添加滚动窗口统计特征
+    包括7天、30天、100天滚动频率和热度指数
+    """
+    if df.empty:
+        return df
+    
+    print("添加滚动窗口统计特征...")
+    df = df.sort_values('date')
+    
+    # 创建生肖虚拟变量
+    zodiac_dummies = pd.get_dummies(df['zodiac'])
+    
+    # 计算滚动频率
+    rolling_features = {}
+    for window in [7, 30, 100]:
+        rolling = zodiac_dummies.rolling(window=window, min_periods=1).mean()
+        rolling.columns = [f'rolling_{window}d_{zodiac}' for zodiac in rolling.columns]
+        rolling_features[window] = rolling
+    
+    # 计算长期平均频率
+    long_term_avg = zodiac_dummies.expanding().mean()
+    
+    # 计算热度指数
+    heat_index_features = {}
+    for window in [7, 30, 100]:
+        heat_index = rolling_features[window] / long_term_avg
+        heat_index.columns = [f'heat_index_{window}d_{zodiac}' for zodiac in heat_index.columns]
+        heat_index_features[window] = heat_index
+    
+    # 合并所有特征
+    all_rolling = pd.concat([
+        pd.concat(rolling_features.values(), axis=1),
+        pd.concat(heat_index_features.values(), axis=1)
+    ], axis=1)
+    
+    # 替换无穷大值为0
+    all_rolling = all_rolling.replace([np.inf, -np.inf], 0)
+    
+    # 合并到原始数据
+    df = pd.concat([df, all_rolling], axis=1)
+    print(f"已添加滚动窗口统计特征: {len(all_rolling.columns)}个新特征")
+    return df
+
 def add_all_features(df):
     """一次性添加所有特征"""
     df = add_temporal_features(df)
     df = add_lunar_features(df)
     df = add_festival_features(df)
     df = add_season_features(df)
+    df = add_rolling_features(df)
     return df
 
 # 测试函数
 if __name__ == "__main__":
     print("===== 测试数据处理器 =====")
-    test_dates = pd.date_range(start='2023-01-01', periods=5, freq='D')
-    test_df = pd.DataFrame({'date': test_dates})
+    
+    # 创建测试数据
+    test_dates = pd.date_range(start='2023-01-01', periods=100, freq='D')
+    test_df = pd.DataFrame({
+        'date': test_dates,
+        'zodiac': ['鼠', '牛', '虎', '兔', '龙', '蛇', '马', '羊', '猴', '鸡'] * 10
+    })
+    
+    # 添加所有特征
     test_df = add_all_features(test_df)
-    print(test_df)
+    
+    # 打印结果
+    print("\n测试结果:")
+    print(test_df[['date', 'zodiac', 'rolling_7d_鼠', 'heat_index_7d_鼠']].tail(10))
+    
+    # 验证特征存在
+    expected_features = [
+        'rolling_7d_鼠', 'rolling_30d_鼠', 'rolling_100d_鼠',
+        'heat_index_7d_鼠', 'heat_index_30d_鼠', 'heat_index_100d_鼠'
+    ]
+    
+    missing = [f for f in expected_features if f not in test_df.columns]
+    if missing:
+        print(f"\n错误: 缺失特征: {', '.join(missing)}")
+    else:
+        print("\n所有滚动特征添加成功")
+    
     print("\n===== 测试完成 =====")
