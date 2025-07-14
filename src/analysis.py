@@ -10,8 +10,19 @@ from collections import defaultdict
 from src.strategy_manager import StrategyManager  # 导入增强的策略管理器
 import warnings
 
-# 忽略SettingWithCopyWarning
-warnings.filterwarnings("ignore", category=pd.core.common.SettingWithCopyWarning)
+# 兼容不同版本 Pandas 的 SettingWithCopyWarning
+try:
+    # 新版 Pandas
+    from pandas.errors import SettingWithCopyWarning
+    warnings.filterwarnings("ignore", category=SettingWithCopyWarning)
+except ImportError:
+    try:
+        # 旧版 Pandas
+        from pandas.core.common import SettingWithCopyWarning
+        warnings.filterwarnings("ignore", category=SettingWithCopyWarning)
+    except (ImportError, AttributeError):
+        # 如果两个位置都没有，忽略警告
+        pass
 
 class LotteryAnalyzer:
     def __init__(self):
