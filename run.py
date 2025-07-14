@@ -1,13 +1,14 @@
 import os
 import sys
 import traceback
+from datetime import datetime
 
 # 确保正确导入路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.analysis import LotteryAnalyzer
 from src.utils import send_dingtalk, send_email, log_error
-from src.data_processor import add_temporal_features  # 新增导入
+from src.data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
 
 def main():
     try:
@@ -16,6 +17,7 @@ def main():
         print("=" * 50)
         
         # 创建分析器
+        print("初始化分析器...")
         analyzer = LotteryAnalyzer()
         
         # 确保数据不为空
@@ -23,9 +25,25 @@ def main():
             print("错误：未获取到有效数据，终止分析")
             return
         
+        print(f"原始数据记录数: {len(analyzer.df)}")
+        
         # 添加时序特征（关键优化）
         print("添加时序特征...")
         analyzer.df = add_temporal_features(analyzer.df)
+        
+        # 添加农历特征
+        print("添加农历特征...")
+        analyzer.df = add_lunar_features(analyzer.df)
+        
+        # 添加节日特征
+        print("添加节日特征...")
+        analyzer.df = add_festival_features(analyzer.df)
+        
+        # 添加季节特征
+        print("添加季节特征...")
+        analyzer.df = add_season_features(analyzer.df)
+        
+        print(f"特征工程后数据记录数: {len(analyzer.df)}")
         
         # 生成分析报告
         print("\n生成分析报告...")
@@ -68,6 +86,9 @@ def main():
         })
         
         # 发送错误通知
+        ding_webhook = os.getenv("DINGTALK_WEBHOOK")
+        email_receiver = os.getenv("EMAIL_RECEIVER") or os.getenv("EMAIL_USER")
+        
         if ding_webhook:
             send_dingtalk(f"分析任务失败: {str(e)}", ding_webhook)
         
@@ -75,5 +96,4 @@ def main():
             send_email("彩票分析系统错误", error_msg, email_receiver)
 
 if __name__ == "__main__":
-    from datetime import datetime  # 确保datetime可用
     main()
