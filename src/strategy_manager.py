@@ -2,9 +2,20 @@ import pandas as pd
 import numpy as np
 from collections import defaultdict
 import joblib
-from config import ML_MODEL_PATH
 import os
 from sklearn.metrics import accuracy_score
+
+# 尝试导入 ML_MODEL_PATH，使用容错处理
+try:
+    from config import ML_MODEL_PATH
+except ImportError:
+    # 如果导入失败，使用默认值
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    ML_MODEL_PATH = os.path.join(BASE_DIR, 'models')
+    print(f"警告: 未找到 ML_MODEL_PATH 配置，使用默认值 '{ML_MODEL_PATH}'")
+
+# 确保目录存在
+os.makedirs(ML_MODEL_PATH, exist_ok=True)
 
 class StrategyManager:
     def __init__(self):
@@ -278,8 +289,9 @@ class StrategyManager:
             print(self.feature_importance.head(10))
             
             # 保存模型
-            os.makedirs(ML_MODEL_PATH, exist_ok=True)
-            joblib.dump(rf, os.path.join(ML_MODEL_PATH, 'feature_importance_model.pkl'))
+            model_path = os.path.join(ML_MODEL_PATH, 'feature_importance_model.pkl')
+            joblib.dump(rf, model_path)
+            print(f"特征重要性模型已保存到: {model_path}")
             
             # 更新特征重要性权重
             self._update_feature_imp_weights()
@@ -342,7 +354,7 @@ class StrategyManager:
         self.combo_probs = combo_counts.to_dict()
         
         print(f"已更新生肖组合概率 (基于最近{window}期数据)")
-        # 这里是修复的关键 - 使用正确的括号
+        # 避免f-string嵌套问题
         top5_combos = list(combo_counts.head(5).items())
         print(f"前5个常见组合: {top5_combos}")
     
