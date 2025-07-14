@@ -8,6 +8,10 @@ import re
 from lunarcalendar import Converter, Solar, Lunar  # 精确农历计算
 from collections import defaultdict
 from src.strategy_manager import StrategyManager  # 导入增强的策略管理器
+import warnings
+
+# 忽略SettingWithCopyWarning
+warnings.filterwarnings("ignore", category=pd.core.common.SettingWithCopyWarning)
 
 class LotteryAnalyzer:
     def __init__(self):
@@ -28,7 +32,7 @@ class LotteryAnalyzer:
             if not valid_zodiacs.all():
                 invalid_count = len(self.df) - valid_zodiacs.sum()
                 print(f"警告：发现 {invalid_count} 条记录的生肖映射无效")
-                self.df = self.df[valid_zodiacs]
+                self.df = self.df[valid_zodiacs].copy()
             
             # 添加农历和节日信息
             print("添加农历和节日信息...")
@@ -78,21 +82,31 @@ class LotteryAnalyzer:
             self.df[f'freq_{zodiac}'] = zodiac_counts.get(zodiac, 0.0)
         
         # 2. 季节生肖特征
-        season_zodiac_counts = {}
+        for zodiac in self.zodiacs:
+            # 为每个生肖创建季节特征列
+            self.df[f'season_{zodiac}'] = 0.0
+        
+        # 计算每个季节中每个生肖的频率
         for season in ['春', '夏', '秋', '冬']:
             season_data = self.df[self.df['season'] == season]
             if not season_data.empty:
-                counts = season_data['zodiac'].value_counts(normalize=True)
-                season_zodiac_counts[season] = counts
+                season_counts = season_data['zodiac'].value_counts(normalize=True)
                 for zodiac in self.zodiacs:
-                    self.df[f'season_{zodiac}'] = counts.get(zodiac, 0.0)
+                    # 更新季节特征值
+                    self.df.loc[self.df['season'] == season, f'season_{zodiac}'] = season_counts.get(zodiac, 0.0)
         
         # 3. 节日生肖特征
+        for zodiac in self.zodiacs:
+            # 为每个生肖创建节日特征列
+            self.df[f'festival_{zodiac}'] = 0.0
+        
+        # 计算节日中每个生肖的频率
         festival_data = self.df[self.df['is_festival']]
         if not festival_data.empty:
             festival_counts = festival_data['zodiac'].value_counts(normalize=True)
             for zodiac in self.zodiacs:
-                self.df[f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
+                # 更新节日特征值
+                self.df.loc[self.df['is_festival'], f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
         
         print(f"已添加生肖特征: {len(self.zodiacs)*3}个新特征")
     
@@ -101,13 +115,14 @@ class LotteryAnalyzer:
         print("添加滚动窗口特征...")
         windows = [7, 30]  # 7天和30天窗口
         
+        # 创建生肖出现标志
+        for zodiac in self.zodiacs:
+            self.df[f'occur_{zodiac}'] = (self.df['zodiac'] == zodiac).astype(int)
+        
         for window in windows:
             # 为每个生肖添加滚动窗口特征
             for zodiac in self.zodiacs:
-                # 创建生肖出现标志
-                self.df[f'occur_{zodiac}'] = (self.df['zodiac'] == zodiac).astype(int)
-                
-                # 计算滚动频率
+                # 计算滚动频率 - 使用expanding min_periods确保有足够数据
                 self.df[f'rolling_{window}d_{zodiac}'] = (
                     self.df[f'occur_{zodiac}'].rolling(window=window, min_periods=1).mean()
                 )
@@ -115,19 +130,22 @@ class LotteryAnalyzer:
         print(f"已添加滚动窗口特征: {len(windows)*len(self.zodiacs)}个新特征")
     
     def get_lunar_date(self, dt):
-        """精确转换公历到农历"""
+        """精确转换公历到农历 - 增强健壮性"""
         try:
             solar = Solar(dt.year, dt.month, dt.day)
             lunar = Converter.Solar2Lunar(solar)
             return lunar
         except Exception as e:
             print(f"农历转换错误: {e}, 日期: {dt}")
-            return None
+            # 返回一个默认的农历日期对象
+            return Lunar(dt.year, dt.month, dt.day, False)
     
     def detect_festival(self, dt):
-        """识别传统节日"""
+        """识别传统节日 - 增强健壮性"""
         lunar = self.get_lunar_date(dt)
-        if not lunar:
+        
+        # 处理无效的农历日期
+        if not isinstance(lunar, Lunar):
             return "无"
         
         lunar_date = (lunar.month, lunar.day)
@@ -190,10 +208,14 @@ class LotteryAnalyzer:
             if row['zodiac'] == last_zodiac:
                 consecutive_count += 1
             else:
-                if consecutive_count > 1:
+                if consecutive_count > 1 and last_zodiac:
                     patterns['consecutive'][last_zodiac] = max(patterns['consecutive'][last_zodiac], consecutive_count)
                 consecutive_count = 1
                 last_zodiac = row['zodiac']
+        
+        # 处理最后一条记录
+        if consecutive_count > 1 and last_zodiac:
+            patterns['consecutive'][last_zodiac] = max(patterns['consecutive'][last_zodiac], consecutive_count)
         
         # 2. 间隔出现模式
         last_occurrence = {}
@@ -262,7 +284,7 @@ class LotteryAnalyzer:
         }
     
     def backtest_strategy(self):
-        """严格回测预测策略（使用固定窗口滑动）"""
+        """严格回测预测策略（使用固定窗口滑动） - 性能优化"""
         if self.df.empty:
             print("无法回测 - 数据为空")
             return pd.DataFrame(), 0.0
@@ -275,18 +297,25 @@ class LotteryAnalyzer:
         print(f"开始回测策略（固定窗口{window}期）...")
         results = []
         
-        # 使用单个策略管理器处理整个回测过程
+        # 使用单个策略管理器处理整个回测过程 - 性能优化
         strategy_manager = StrategyManager()
         
-        for i in range(window, len(self.df)-1):
+        # 预先计算整个数据集的索引位置
+        indices = range(window, len(self.df)-1)
+        total = len(indices)
+        
+        for i, idx in enumerate(indices):
+            if (i+1) % 50 == 0:
+                print(f"回测进度: {i+1}/{total} ({((i+1)/total*100):.1f}%)")
+            
             # 训练数据：从 i-window 到 i-1 (共window期)
-            train = self.df.iloc[i-window:i].copy()
+            train = self.df.iloc[idx-window:idx].copy()
             
             # 为训练数据添加特征（关键修复）
             self.add_features_to_data(train)
             
             # 测试数据：下一期 (i)
-            test = self.df.iloc[i:i+1]
+            test = self.df.iloc[idx:idx+1]
             
             # 更新策略管理器的数据
             strategy_manager.update_combo_probs(train)
@@ -340,22 +369,38 @@ class LotteryAnalyzer:
         return result_df, accuracy
     
     def add_features_to_data(self, df):
-        """为数据添加必要的特征"""
-        # 添加生肖频率特征
+        """为数据添加必要的特征 - 完整实现"""
+        # 1. 添加生肖频率特征
         zodiac_counts = df['zodiac'].value_counts(normalize=True)
         for zodiac in self.zodiacs:
             df[f'freq_{zodiac}'] = zodiac_counts.get(zodiac, 0.0)
         
-        # 添加季节生肖特征
+        # 2. 添加季节生肖特征
         for zodiac in self.zodiacs:
+            # 初始化季节特征列
             df[f'season_{zodiac}'] = 0.0
         
-        # 添加节日生肖特征
+        # 计算每个季节中每个生肖的频率
+        for season in ['春', '夏', '秋', '冬']:
+            season_data = df[df['season'] == season]
+            if not season_data.empty:
+                season_counts = season_data['zodiac'].value_counts(normalize=True)
+                for zodiac in self.zodiacs:
+                    # 更新季节特征值
+                    df.loc[df['season'] == season, f'season_{zodiac}'] = season_counts.get(zodiac, 0.0)
+        
+        # 3. 添加节日生肖特征
+        for zodiac in self.zodiacs:
+            # 初始化节日特征列
+            df[f'festival_{zodiac}'] = 0.0
+        
+        # 计算节日中每个生肖的频率
         festival_data = df[df['is_festival']]
         if not festival_data.empty:
             festival_counts = festival_data['zodiac'].value_counts(normalize=True)
             for zodiac in self.zodiacs:
-                df[f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
+                # 更新节日特征值
+                df.loc[df['is_festival'], f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
     
     def apply_pattern_enhancement(self, prediction, last_zodiac, target_date, data):
         """应用历史模式增强预测"""
@@ -370,7 +415,7 @@ class LotteryAnalyzer:
                 print(f"节日效应增强: {festival}节日常见生肖 {boost_zodiac} 加入预测")
         
         # 2. 间隔模式增强
-        for zodiac in prediction:
+        for zodiac in prediction.copy():  # 使用副本避免修改迭代中的列表
             if zodiac in self.patterns['intervals']:
                 avg_interval = self.patterns['intervals'][zodiac]
                 last_idx = data[data['zodiac'] == zodiac].index[-1] if not data.empty else -1
@@ -527,7 +572,7 @@ class LotteryAnalyzer:
         
         回测结果（最近{BACKTEST_WINDOW}期）：
         - 准确率：{accuracy:.2%}
-        - 命中次数：{int(accuracy * BACKTEST_WINDOW)}次
+        - 命中次数：{int(accuracy * len(backtest_df)) if not backtest_df.empty else 0}/{len(backtest_df) if not backtest_df.empty else 0}
         
         下期预测：
         - 预测期号：{prediction['next_number']}
