@@ -1,11 +1,11 @@
 import pandas as pd
 import numpy as np
-from src.utils import fetch_historical_data, zodiac_mapping
+from src.utils import fetch_historical_data, zodiac_mapping, log_error  # 添加log_error导入
 from config import BACKTEST_WINDOW
 from datetime import datetime, timedelta
 import holidays
 import re
-from lunarcalendar import Converter, Solar, Lunar  # 精确农历计算
+from lunarcalendar import Converter, Solar, Lunar
 from collections import defaultdict
 
 class StrategyManager:
@@ -50,13 +50,20 @@ class StrategyManager:
         print(f"调整后权重: {self.weights}")
 
 class LotteryAnalyzer:
-    def __init__(self):
+    def __init__(self, df=None):
         """初始化分析器，获取历史数据并处理生肖映射"""
-        print("开始获取历史数据...")
-        self.df = fetch_historical_data()
+        if df is not None:
+            self.df = df
+            print(f"使用提供的 {len(self.df)} 条历史开奖记录")
+        else:
+            print("开始获取历史数据...")
+            self.df = fetch_historical_data()
+            if not self.df.empty:
+                print(f"成功获取 {len(self.df)} 条历史开奖记录")
+            else:
+                print("警告：未获取到任何有效数据")
+        
         if not self.df.empty:
-            print(f"成功获取 {len(self.df)} 条历史开奖记录")
-            
             # 应用基于年份的动态生肖映射
             self.df['zodiac'] = self.df.apply(
                 lambda row: zodiac_mapping(row['special'], row['year']), axis=1
@@ -77,6 +84,10 @@ class LotteryAnalyzer:
             self.df['festival'] = self.df['date'].apply(self.detect_festival)
             self.df['season'] = self.df['date'].apply(self.get_season)
             
+            # 添加基础时序特征（修复添加）
+            print("添加基础时序特征...")
+            self.df = self.add_temporal_features(self.df)
+            
             # 初始化策略管理器
             self.strategy_manager = StrategyManager()
             
@@ -91,6 +102,20 @@ class LotteryAnalyzer:
             print("警告：未获取到任何有效数据")
             self.strategy_manager = StrategyManager()
             self.patterns = {}
+    
+    def add_temporal_features(self, df):
+        """添加星期几、月份等基础时序特征"""
+        # 确保日期是datetime类型
+        if not pd.api.types.is_datetime64_any_dtype(df['date']):
+            df['date'] = pd.to_datetime(df['date'])
+        
+        # 添加星期几特征 (1-7 表示周一到周日)
+        df['weekday'] = df['date'].dt.dayofweek + 1
+        
+        # 添加月份特征
+        df['month'] = df['date'].dt.month
+        
+        return df
     
     def get_lunar_date(self, dt):
         """精确转换公历到农历"""
@@ -241,49 +266,60 @@ class LotteryAnalyzer:
         }
     
     def backtest_strategy(self):
-        """严格回测预测策略（基于最近200期）"""
+        """严格回测预测策略（基于最近200期） - 修复版本"""
         if self.df.empty:
             print("无法回测 - 数据为空")
             return pd.DataFrame(), 0.0
         
-        if len(self.df) < BACKTEST_WINDOW:
-            print(f"警告：数据不足{BACKTEST_WINDOW}期，实际只有{len(self.df)}期")
+        if len(self.df) < BACKTEST_WINDOW + 1:  # 需要至少201期数据
+            print(f"警告：数据不足{BACKTEST_WINDOW + 1}期，实际只有{len(self.df)}期")
             return pd.DataFrame(), 0.0
         
-        print(f"开始回测策略（最近{BACKTEST_WINDOW}期）...")
-        recent = self.df.tail(BACKTEST_WINDOW).copy().reset_index(drop=True)
+        print(f"开始回测策略（固定{BACKTEST_WINDOW}期窗口）...")
         results = []
         
-        for i in range(len(recent)-1):
-            # 使用历史数据预测
-            train = recent.iloc[:i+1]
-            actual = recent.iloc[i+1]['zodiac']
-            last_zodiac = train.iloc[-1]['zodiac']
-            target_date = recent.iloc[i+1]['date']
+        # 使用固定窗口大小的滑动窗口回测
+        for i in range(BACKTEST_WINDOW, len(self.df) - 1):
+            # 获取训练数据 (固定200期窗口)
+            train = self.df.iloc[i - BACKTEST_WINDOW:i].copy()
             
-            # 策略：使用加权组合预测
-            try:
-                # 获取预测
-                prediction = self._generate_prediction(train, last_zodiac, target_date)
-                
-                # 应用模式增强
-                prediction = self.apply_pattern_enhancement(prediction, last_zodiac, target_date, train)
-                
-                # 打印调试信息
-                if i == len(recent)-2:  # 最新一期
-                    print(f"最新回测预测: 上期生肖={last_zodiac}, 预测生肖={prediction}, 实际生肖={actual}")
-            except Exception as e:
-                print(f"回测过程中出错: {e}")
-                prediction = []
+            # 获取测试数据 (下一期)
+            test = self.df.iloc[i + 1:i + 2]
+            
+            # 创建分析器实例并传入训练数据
+            analyzer = LotteryAnalyzer(df=train)
+            
+            # 进行预测
+            prediction = analyzer.predict_next()
+            actual = test['zodiac'].values[0]
+            predicted_zodiacs = prediction.get('prediction', [])
+            
+            # 检查是否命中
+            is_hit = 1 if actual in predicted_zodiacs else 0
             
             # 记录结果
             results.append({
-                '期号': recent.iloc[i+1]['expect'],
-                '上期生肖': last_zodiac,
+                '期号': test['expect'].values[0],
+                '日期': test['date'].values[0],
+                '上期生肖': train.iloc[-1]['zodiac'],
                 '实际生肖': actual,
-                '预测生肖': ", ".join(prediction) if prediction else "无预测",
-                '是否命中': 1 if actual in prediction else 0
+                '预测生肖': ", ".join(predicted_zodiacs) if predicted_zodiacs else "无预测",
+                '是否命中': is_hit
             })
+            
+            # 记录错误日志
+            if not is_hit:
+                error_data = {
+                    'draw_number': test['expect'].values[0],
+                    'date': test['date'].values[0],
+                    'actual_zodiac': actual,
+                    'predicted_zodiacs': ",".join(predicted_zodiacs) if predicted_zodiacs else "无预测",
+                    'last_zodiac': train.iloc[-1]['zodiac'],
+                    'weekday': test['weekday'].values[0],
+                    'month': test['month'].values[0],
+                    'lunar_month': test['lunar'].apply(lambda x: x.month).values[0] if 'lunar' in test else None
+                }
+                log_error(error_data)
         
         result_df = pd.DataFrame(results)
         if not result_df.empty:
@@ -485,7 +521,7 @@ class LotteryAnalyzer:
         
         # 生成详细报告
         report = f"""
-        ===== 彩票分析报告 [{datetime.now().strftime('%Y-%m-%d %H:%M')}] =====
+        ===== 每日彩报 [{datetime.now().strftime('%Y-%m-%d %H:%M')}] =====
         
         数据统计：
         - 总期数：{len(self.df)}
