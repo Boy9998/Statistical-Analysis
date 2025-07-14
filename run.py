@@ -4,25 +4,40 @@ import traceback
 from datetime import datetime
 
 # 确保正确导入路径
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+sys.path.append(os.path.join(current_dir, "src"))
+
+print(f"当前工作目录: {os.getcwd()}")
+print(f"系统路径: {sys.path}")
 
 try:
+    # 尝试从 src 包导入
     from src.data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
     from src.analysis import LotteryAnalyzer
     from src.utils import send_dingtalk, send_email, log_error
+    print("成功从 src 包导入模块")
 except ImportError as e:
-    print(f"导入错误: {e}")
-    print("正在尝试直接导入模块...")
+    print(f"从 src 包导入失败: {e}")
     try:
-        # 尝试直接导入（当src作为包时）
-        from .src.data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
-        from .src.analysis import LotteryAnalyzer
-        from .src.utils import send_dingtalk, send_email, log_error
-    except ImportError:
-        # 尝试相对导入（当作为模块运行时）
-        from data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
-        from analysis import LotteryAnalyzer
-        from utils import send_dingtalk, send_email, log_error
+        # 尝试直接导入模块
+        import data_processor
+        import analysis
+        import utils
+        print("成功直接导入模块")
+        
+        # 创建别名
+        add_temporal_features = data_processor.add_temporal_features
+        add_lunar_features = data_processor.add_lunar_features
+        add_festival_features = data_processor.add_festival_features
+        add_season_features = data_processor.add_season_features
+        LotteryAnalyzer = analysis.LotteryAnalyzer
+        send_dingtalk = utils.send_dingtalk
+        send_email = utils.send_email
+        log_error = utils.log_error
+    except ImportError as e:
+        print(f"直接导入失败: {e}")
+        raise ImportError("无法导入所需模块，请检查文件结构和路径") from e
 
 def main():
     try:
