@@ -5,7 +5,7 @@ from config import BACKTEST_WINDOW
 from datetime import datetime, timedelta
 import holidays
 import re
-from lunarcalendar import Converter, Solar, Lunar
+from lunarcalendar import Converter, Solar, Lunar  # 精确农历计算
 from collections import defaultdict
 
 class StrategyManager:
@@ -129,8 +129,8 @@ class LotteryAnalyzer:
             (12, 22): "冬至"
         }
         
-        # 春节范围：农历正月初一至十五
-        if lunar.month == 1 and 1 <= lunar.day <= 15:
+        # 春节识别优化：仅正月初一
+        if lunar.month == 1 and lunar.day == 1:
             return "春节"
         
         # 精确匹配
@@ -202,53 +202,92 @@ class LotteryAnalyzer:
         print(f"检测到模式: {len(patterns['consecutive'])}个连续模式, {len(patterns['intervals'])}个间隔模式, {len(patterns['festival_boost'])}个节日效应")
         return patterns
     
+    def analyze_zodiac_patterns(self):
+        """分析生肖出现规律"""
+        if self.df.empty:
+            print("无法进行分析 - 数据为空")
+            return {}
+        
+        print("开始分析生肖出现规律...")
+        
+        # 1. 生肖频率分析（基于全部历史数据）
+        freq = self.df['zodiac'].value_counts().reset_index()
+        freq.columns = ['生肖', '出现次数']
+        freq['频率(%)'] = round(freq['出现次数'] / len(self.df) * 100, 2)
+        
+        # 2. 生肖转移分析（基于最近200期）
+        if len(self.df) >= BACKTEST_WINDOW:
+            recent = self.df.tail(BACKTEST_WINDOW)
+            print(f"使用最近{BACKTEST_WINDOW}期数据计算转移矩阵")
+            
+            # 创建转移矩阵
+            transition = pd.crosstab(
+                recent['zodiac'].shift(-1), 
+                recent['zodiac'], 
+                normalize=1
+            ).round(4) * 100
+        else:
+            print(f"数据不足{BACKTEST_WINDOW}期，使用全部数据计算转移矩阵")
+            transition = pd.crosstab(
+                self.df['zodiac'].shift(-1), 
+                self.df['zodiac'], 
+                normalize=1
+            ).round(4) * 100
+        
+        return {
+            'frequency': freq,
+            'transition_matrix': transition
+        }
+    
     def backtest_strategy(self):
-        """严格回测预测策略（基于固定200期滑动窗口）"""
+        """严格回测预测策略（使用固定窗口滑动）"""
         if self.df.empty:
             print("无法回测 - 数据为空")
             return pd.DataFrame(), 0.0
         
-        if len(self.df) < BACKTEST_WINDOW + 1:
-            print(f"警告：数据不足{BACKTEST_WINDOW + 1}期，实际只有{len(self.df)}期")
+        window = BACKTEST_WINDOW
+        if len(self.df) < window + 1:
+            print(f"警告：数据不足{window+1}期，实际只有{len(self.df)}期")
             return pd.DataFrame(), 0.0
         
-        print(f"开始回测策略（固定{BACKTEST_WINDOW}期滑动窗口）...")
+        print(f"开始回测策略（固定窗口{window}期）...")
         results = []
         
-        # 使用固定窗口滑动回测
-        for i in range(BACKTEST_WINDOW, len(self.df) - 1):
-            train = self.df.iloc[i-BACKTEST_WINDOW:i]
-            test = self.df.iloc[i+1:i+2]
+        # 使用固定窗口滑动
+        for i in range(window, len(self.df)-1):
+            # 训练数据：从 i-window 到 i-1 (共window期)
+            train = self.df.iloc[i-window:i]
+            # 测试数据：下一期 (i)
+            test = self.df.iloc[i:i+1]
             
-            # 生成预测
-            last_zodiac = train.iloc[-1]['zodiac']
-            target_date = test['date'].values[0]
-            prediction = self._generate_prediction(train, last_zodiac, target_date)
-            prediction = self.apply_pattern_enhancement(prediction, last_zodiac, target_date, train)
+            # 创建临时分析器（使用窗口数据）
+            analyzer = LotteryAnalyzer()
+            analyzer.df = train.copy()  # 使用副本避免修改原始数据
+            
+            # 预测
+            prediction = analyzer.predict_next()['prediction']
+            actual = test['zodiac'].values[0]
             
             # 记录结果
-            actual = test['zodiac'].values[0]
             is_hit = 1 if actual in prediction else 0
-            
             results.append({
                 '期号': test['expect'].values[0],
-                '上期生肖': last_zodiac,
+                '上期生肖': train.iloc[-1]['zodiac'],
                 '实际生肖': actual,
                 '预测生肖': ", ".join(prediction),
-                '是否命中': is_hit,
-                '预测时间': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                '是否命中': is_hit
             })
             
-            # 记录错误日志
+            # 记录预测错误
             if not is_hit:
                 error_data = {
                     'draw_number': test['expect'].values[0],
-                    'date': pd.to_datetime(test['date'].values[0]).strftime('%Y-%m-%d'),
+                    'date': test['date'].dt.strftime('%Y-%m-%d').values[0],
                     'actual_zodiac': actual,
                     'predicted_zodiacs': ",".join(prediction),
-                    'last_zodiac': last_zodiac,
-                    'weekday': pd.to_datetime(test['date'].values[0]).weekday() + 1,
-                    'month': pd.to_datetime(test['date'].values[0]).month
+                    'last_zodiac': train.iloc[-1]['zodiac'],
+                    'weekday': test['weekday'].values[0] if 'weekday' in test.columns else None,
+                    'month': test['month'].values[0] if 'month' in test.columns else None
                 }
                 log_error(error_data)
         
