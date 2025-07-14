@@ -11,7 +11,7 @@ BACKTEST_WINDOW = 200  # 回测期数
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 MODEL_DIR = os.path.join(BASE_DIR, 'models')
-ML_MODEL_PATH = MODEL_DIR  # 添加ML_MODEL_PATH定义
+ML_MODEL_PATH = os.path.join(MODEL_DIR, 'ml_models')  # 添加ML_MODEL_PATH定义
 
 # ==================== 文件配置 ====================
 ERROR_LOG_PATH = os.path.join(DATA_DIR, 'error_log.csv')
@@ -29,6 +29,7 @@ EMAIL_TIMEOUT = 10  # 邮件发送超时时间（秒）
 # 确保必要目录存在
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
+os.makedirs(ML_MODEL_PATH, exist_ok=True)  # 确保ML模型目录存在
 
 # ==================== 调试信息 ====================
 if __name__ == "__main__":
@@ -59,4 +60,5 @@ if __name__ == "__main__":
     print("\n[目录状态]")
     print(f"数据目录存在: {os.path.exists(DATA_DIR)}")
     print(f"模型目录存在: {os.path.exists(MODEL_DIR)}")
+    print(f"ML模型目录存在: {os.path.exists(ML_MODEL_PATH)}")
     print("=======================")
