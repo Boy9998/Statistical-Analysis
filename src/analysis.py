@@ -35,6 +35,8 @@ class LotteryAnalyzer:
             print("添加农历和节日信息...")
             self.df['lunar'] = self.df['date'].apply(self.get_lunar_date)
             self.df['festival'] = self.df['date'].apply(self.detect_festival)
+            # 新增 is_festival 列
+            self.df['is_festival'] = self.df['festival'] != "无"
             self.df['season'] = self.df['date'].apply(self.get_season)
             
             # 初始化增强的策略管理器
@@ -154,7 +156,7 @@ class LotteryAnalyzer:
         # 3. 节日效应模式
         festival_zodiacs = defaultdict(lambda: defaultdict(int))
         for idx, row in self.df.iterrows():
-            if row['festival'] != "无":
+            if row['is_festival']:  # 使用 is_festival 列
                 festival_zodiacs[row['festival']][row['zodiac']] += 1
         
         # 找出每个节日出现频率最高的生肖
@@ -217,30 +219,35 @@ class LotteryAnalyzer:
         print(f"开始回测策略（固定窗口{window}期）...")
         results = []
         
-        # 使用固定窗口滑动
+        # 优化：避免在每次迭代中创建新的LotteryAnalyzer实例
+        # 使用单个策略管理器处理整个回测过程
+        strategy_manager = StrategyManager()
+        
         for i in range(window, len(self.df)-1):
             # 训练数据：从 i-window 到 i-1 (共window期)
             train = self.df.iloc[i-window:i]
             # 测试数据：下一期 (i)
             test = self.df.iloc[i:i+1]
             
-            # 创建临时分析器（使用窗口数据）
-            analyzer = LotteryAnalyzer()
-            analyzer.df = train.copy()  # 使用副本避免修改原始数据
+            # 更新策略管理器的数据
+            strategy_manager.update_combo_probs(train)
+            strategy_manager.evaluate_factor_validity(train)
             
-            # 更新临时分析器的策略管理器
-            analyzer.strategy_manager.update_combo_probs(train)
-            analyzer.strategy_manager.evaluate_factor_validity(train)
+            # 获取特征数据（确保包含所有必要特征）
+            feature_row = train.iloc[-1]
+            last_zodiac = feature_row['zodiac']
             
             # 预测
-            prediction = analyzer.predict_next()['prediction']
+            prediction, _ = strategy_manager.generate_prediction(
+                feature_row, last_zodiac
+            )
             actual = test['zodiac'].values[0]
             
             # 记录结果
             is_hit = 1 if actual in prediction else 0
             results.append({
                 '期号': test['expect'].values[0],
-                '上期生肖': train.iloc[-1]['zodiac'],
+                '上期生肖': last_zodiac,
                 '实际生肖': actual,
                 '预测生肖': ", ".join(prediction),
                 '是否命中': is_hit
@@ -253,7 +260,7 @@ class LotteryAnalyzer:
                     'date': test['date'].dt.strftime('%Y-%m-%d').values[0],
                     'actual_zodiac': actual,
                     'predicted_zodiacs': ",".join(prediction),
-                    'last_zodiac': train.iloc[-1]['zodiac'],
+                    'last_zodiac': last_zodiac,
                     'weekday': test['weekday'].values[0] if 'weekday' in test.columns else None,
                     'month': test['month'].values[0] if 'month' in test.columns else None
                 }
