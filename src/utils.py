@@ -5,13 +5,14 @@ from email.mime.text import MIMEText
 import os
 import json
 from datetime import datetime, timedelta
-from config import START_YEAR, CURRENT_YEAR, API_URL
+from config import START_YEAR, CURRENT_YEAR, API_URL, ERROR_LOG_PATH
 import hashlib
 import hmac
 import base64
 import urllib.parse
 import time
 import re
+import csv  # 新增导入
 
 def fetch_historical_data():
     """获取2023年至今的真实历史开奖数据"""
@@ -85,42 +86,7 @@ def fetch_historical_data():
         df['special'] = 0  # 默认值
     
     return df.sort_values('date').reset_index(drop=True)
-def log_error(error_data):
-    """记录错误日志到CSV文件"""
-    import os
-    import csv
-    from datetime import datetime
-    from config import ERROR_LOG_PATH
-    
-    # 确保目录存在
-    os.makedirs(os.path.dirname(ERROR_LOG_PATH), exist_ok=True)
-    
-    # 定义CSV文件头
-    fieldnames = [
-        'timestamp', 
-        'error_type',
-        'error_msg',
-        'draw_number',
-        'date',
-        'actual_zodiac',
-        'predicted_zodiacs',
-        'last_zodiac',
-        'weekday',
-        'month'
-    ]
-    
-    # 添加时间戳
-    error_data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    # 写入文件
-    file_exists = os.path.isfile(ERROR_LOG_PATH)
-    with open(ERROR_LOG_PATH, 'a', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(error_data)
-    
-    print(f"错误已记录: {error_data.get('error_type', '未知错误')}")
+
 def zodiac_mapping(number, year):
     """
     根据年份动态映射生肖
@@ -261,6 +227,34 @@ def send_email(subject, content, receiver):
     
     return False
 
+def log_error(error_data):
+    """记录预测错误到CSV文件"""
+    # 确保目录存在
+    os.makedirs(os.path.dirname(ERROR_LOG_PATH), exist_ok=True)
+    
+    # 文件头
+    fieldnames = [
+        'timestamp', 'draw_number', 'date', 'actual_zodiac', 
+        'predicted_zodiacs', 'last_zodiac', 'weekday', 'month'
+    ]
+    
+    # 添加时间戳
+    error_data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 写入文件
+    file_exists = os.path.isfile(ERROR_LOG_PATH)
+    try:
+        with open(ERROR_LOG_PATH, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(error_data)
+        print(f"错误日志已记录: {error_data['draw_number']}")
+        return True
+    except Exception as e:
+        print(f"写入错误日志失败: {e}")
+        return False
+
 # 测试代码
 if __name__ == "__main__":
     print("===== 测试 utils 模块 =====")
@@ -299,5 +293,19 @@ if __name__ == "__main__":
         send_email("测试邮件", test_message, os.getenv("EMAIL_USER"))
     else:
         print("邮件环境变量未设置，跳过测试")
+    
+    # 测试错误日志记录
+    print("\n测试错误日志功能...")
+    test_error = {
+        'draw_number': '2024001',
+        'date': '2024-01-01',
+        'actual_zodiac': '虎',
+        'predicted_zodiacs': '兔,龙,蛇,马,羊',
+        'last_zodiac': '牛',
+        'weekday': 1,
+        'month': 1
+    }
+    log_error(test_error)
+    print(f"测试错误日志已写入: {ERROR_LOG_PATH}")
     
     print("\n===== 测试完成 =====")
