@@ -6,9 +6,23 @@ from datetime import datetime
 # 确保正确导入路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from src.analysis import LotteryAnalyzer
-from src.utils import send_dingtalk, send_email, log_error
-from src.data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
+try:
+    from src.data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
+    from src.analysis import LotteryAnalyzer
+    from src.utils import send_dingtalk, send_email, log_error
+except ImportError as e:
+    print(f"导入错误: {e}")
+    print("正在尝试直接导入模块...")
+    try:
+        # 尝试直接导入（当src作为包时）
+        from .src.data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
+        from .src.analysis import LotteryAnalyzer
+        from .src.utils import send_dingtalk, send_email, log_error
+    except ImportError:
+        # 尝试相对导入（当作为模块运行时）
+        from data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
+        from analysis import LotteryAnalyzer
+        from utils import send_dingtalk, send_email, log_error
 
 def main():
     try:
