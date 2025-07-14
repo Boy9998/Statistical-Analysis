@@ -5,14 +5,14 @@ import joblib
 import os
 from sklearn.metrics import accuracy_score
 
-# 尝试导入 ML_MODEL_PATH，使用容错处理
+# 导入ML_MODEL_PATH配置
 try:
     from config import ML_MODEL_PATH
 except ImportError:
     # 如果导入失败，使用默认值
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    ML_MODEL_PATH = os.path.join(BASE_DIR, 'models')
-    print(f"警告: 未找到 ML_MODEL_PATH 配置，使用默认值 '{ML_MODEL_PATH}'")
+    ML_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'ml_models')
+    print(f"警告: 未找到ML_MODEL_PATH配置，使用默认值'{ML_MODEL_PATH}'")
 
 # 确保目录存在
 os.makedirs(ML_MODEL_PATH, exist_ok=True)
@@ -77,6 +77,7 @@ class StrategyManager:
             self.weights[key] = round(self.weights[key] / total, 2)
         
         print(f"调整后权重: {self.weights}")
+        return self.weights
     
     def update_factor_performance(self, factor_accuracy):
         """更新因子表现记录"""
@@ -88,7 +89,7 @@ class StrategyManager:
         """回测验证因子有效性"""
         if len(df) < window:
             print(f"数据不足{window}期，无法进行因子有效性验证")
-            return
+            return {}
         
         # 使用最近window期数据进行回测
         recent = df.iloc[-window:]
@@ -127,8 +128,9 @@ class StrategyManager:
             if scores:
                 # 使用指数加权平均，近期表现权重更高
                 weights = np.array([0.5 ** i for i in range(len(scores))][::-1])
+                weights = weights[:len(scores)]  # 确保权重长度匹配
                 weights /= weights.sum()
-                weighted_avg = np.dot(scores, weights[:len(scores)])
+                weighted_avg = np.dot(scores, weights)
                 self.factor_validity[factor] = weighted_avg
         
         print(f"因子有效性评分: {self.factor_validity}")
@@ -147,7 +149,7 @@ class StrategyManager:
             predictions.append(pred)
             actuals.append(df['zodiac'].iloc[i])
         
-        return accuracy_score(actuals, predictions)
+        return accuracy_score(actuals, predictions) if predictions else 0
     
     def _validate_transition_factor(self, df):
         """验证转移概率因子有效性"""
@@ -166,9 +168,12 @@ class StrategyManager:
             prev_zodiac = df['zodiac'].iloc[i-1]
             if prev_zodiac in transitions:
                 transitions_from_prev = transitions[prev_zodiac]
-                pred = max(transitions_from_prev, key=transitions_from_prev.get)
-                predictions.append(pred)
-                actuals.append(df['zodiac'].iloc[i])
+                # 找到概率最高的转移
+                total = sum(transitions_from_prev.values())
+                if total > 0:
+                    pred = max(transitions_from_prev, key=transitions_from_prev.get)
+                    predictions.append(pred)
+                    actuals.append(df['zodiac'].iloc[i])
         
         return accuracy_score(actuals, predictions) if predictions else 0
     
@@ -190,7 +195,7 @@ class StrategyManager:
                 predictions.append(pred)
                 actuals.append(df['zodiac'].iloc[i])
         
-        return accuracy_score(actuals, predictions)
+        return accuracy_score(actuals, predictions) if predictions else 0
     
     def _validate_festival_factor(self, df):
         """验证节日因子有效性"""
@@ -349,6 +354,9 @@ class StrategyManager:
         # 创建组合列：上期生肖-本期生肖
         recent['combo'] = recent['zodiac'].shift() + '-' + recent['zodiac']
         
+        # 删除NaN值
+        recent = recent.dropna(subset=['combo'])
+        
         # 计算组合概率
         combo_counts = recent['combo'].value_counts(normalize=True)
         self.combo_probs = combo_counts.to_dict()
@@ -384,7 +392,7 @@ class StrategyManager:
             report += f"- {factor}: {weight:.2f}\n"
         
         # 因子历史表现
-        report += "\n历史准确率:\n"
+        report += "\n历史准确率 (最近5次平均):\n"
         for factor, acc_history in self.factor_performance.items():
             if acc_history:
                 avg_acc = np.mean(acc_history[-5:])  # 最近5次平均
@@ -405,7 +413,7 @@ class StrategyManager:
         
         # 因子有效性
         if self.factor_validity:
-            report += "\n因子有效性评分:\n"
+            report += "\n因子有效性评分 (0-1):\n"
             for factor, validity in self.factor_validity.items():
                 report += f"- {factor}: {validity:.4f}\n"
         
@@ -456,21 +464,21 @@ class StrategyManager:
         # 获取各生肖频率特征
         zodiac_freq = {z: features[f'freq_{z}'] for z in features.index if f'freq_{z}' in features}
         sorted_zodiac = sorted(zodiac_freq.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:3]]
+        return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
     
     def _transition_prediction(self, last_zodiac):
         """基于转移概率的预测"""
         # 获取各生肖转移概率
         trans_probs = {z: self.combo_probs.get(f"{last_zodiac}-{z}", 0) for z in self.combo_probs}
         sorted_zodiac = sorted(trans_probs.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:3]]
+        return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
     
     def _season_prediction(self, season):
         """基于季节的预测"""
         # 获取季节特征
         season_probs = {z: season[f'season_{z}'] for z in season.index if f'season_{z}' in season}
         sorted_zodiac = sorted(season_probs.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:2]]
+        return [z for z, _ in sorted_zodiac[:2]] if sorted_zodiac else []
     
     def _festival_prediction(self, is_festival):
         """基于节日的预测"""
@@ -480,19 +488,19 @@ class StrategyManager:
         # 获取节日特征
         festival_probs = {z: is_festival[f'festival_{z}'] for z in is_festival.index if f'festival_{z}' in is_festival}
         sorted_zodiac = sorted(festival_probs.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:2]]
+        return [z for z, _ in sorted_zodiac[:2]] if sorted_zodiac else []
     
     def _rolling_prediction(self, features):
         """基于滚动窗口的预测"""
         # 7天滚动窗口
         rolling_7d = {z: features[f'rolling_7d_{z}'] for z in features.index if f'rolling_7d_{z}' in features}
         sorted_7d = sorted(rolling_7d.items(), key=lambda x: x[1], reverse=True)
-        pred_7d = [z for z, _ in sorted_7d[:2]]
+        pred_7d = [z for z, _ in sorted_7d[:2]] if sorted_7d else []
         
         # 30天滚动窗口
         rolling_30d = {z: features[f'rolling_30d_{z}'] for z in features.index if f'rolling_30d_{z}' in features}
         sorted_30d = sorted(rolling_30d.items(), key=lambda x: x[1], reverse=True)
-        pred_30d = [z for z, _ in sorted_30d[:2]]
+        pred_30d = [z for z, _ in sorted_30d[:2]] if sorted_30d else []
         
         return {'7d': pred_7d, '30d': pred_30d}
     
@@ -510,10 +518,11 @@ class StrategyManager:
             # 解析特征对应的生肖
             if '_' in feature:
                 zodiac = feature.split('_')[-1]
-                feature_scores[zodiac] += features[feature] * imp
+                if zodiac in features.index and feature in features:
+                    feature_scores[zodiac] += features[feature] * imp
         
         sorted_zodiac = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:3]]
+        return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
     
     def _fuse_predictions(self, all_predictions):
         """融合多因子预测结果"""
@@ -530,4 +539,4 @@ class StrategyManager:
         
         # 按得分排序
         sorted_zodiac = sorted(zodiac_scores.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:3]]
+        return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
