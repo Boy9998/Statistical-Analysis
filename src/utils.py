@@ -85,7 +85,42 @@ def fetch_historical_data():
         df['special'] = 0  # 默认值
     
     return df.sort_values('date').reset_index(drop=True)
-
+def log_error(error_data):
+    """记录错误日志到CSV文件"""
+    import os
+    import csv
+    from datetime import datetime
+    from config import ERROR_LOG_PATH
+    
+    # 确保目录存在
+    os.makedirs(os.path.dirname(ERROR_LOG_PATH), exist_ok=True)
+    
+    # 定义CSV文件头
+    fieldnames = [
+        'timestamp', 
+        'error_type',
+        'error_msg',
+        'draw_number',
+        'date',
+        'actual_zodiac',
+        'predicted_zodiacs',
+        'last_zodiac',
+        'weekday',
+        'month'
+    ]
+    
+    # 添加时间戳
+    error_data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # 写入文件
+    file_exists = os.path.isfile(ERROR_LOG_PATH)
+    with open(ERROR_LOG_PATH, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(error_data)
+    
+    print(f"错误已记录: {error_data.get('error_type', '未知错误')}")
 def zodiac_mapping(number, year):
     """
     根据年份动态映射生肖
