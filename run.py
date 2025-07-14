@@ -21,23 +21,42 @@ except ImportError as e:
     print(f"从 src 包导入失败: {e}")
     try:
         # 尝试直接导入模块
-        import data_processor
-        import analysis
-        import utils
+        from data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
+        from analysis import LotteryAnalyzer
+        from utils import send_dingtalk, send_email, log_error
         print("成功直接导入模块")
-        
-        # 创建别名
-        add_temporal_features = data_processor.add_temporal_features
-        add_lunar_features = data_processor.add_lunar_features
-        add_festival_features = data_processor.add_festival_features
-        add_season_features = data_processor.add_season_features
-        LotteryAnalyzer = analysis.LotteryAnalyzer
-        send_dingtalk = utils.send_dingtalk
-        send_email = utils.send_email
-        log_error = utils.log_error
     except ImportError as e:
         print(f"直接导入失败: {e}")
-        raise ImportError("无法导入所需模块，请检查文件结构和路径") from e
+        try:
+            # 尝试相对导入
+            from .data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
+            from .analysis import LotteryAnalyzer
+            from .utils import send_dingtalk, send_email, log_error
+            print("成功使用相对导入")
+        except ImportError as e:
+            print(f"相对导入失败: {e}")
+            print("尝试最后手段：动态导入")
+            import importlib.util
+            
+            def load_module(module_path):
+                spec = importlib.util.spec_from_file_location("module", module_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                return module
+            
+            data_processor = load_module(os.path.join(current_dir, "src", "data_processor.py"))
+            analysis = load_module(os.path.join(current_dir, "src", "analysis.py"))
+            utils = load_module(os.path.join(current_dir, "src", "utils.py"))
+            
+            add_temporal_features = data_processor.add_temporal_features
+            add_lunar_features = data_processor.add_lunar_features
+            add_festival_features = data_processor.add_festival_features
+            add_season_features = data_processor.add_season_features
+            LotteryAnalyzer = analysis.LotteryAnalyzer
+            send_dingtalk = utils.send_dingtalk
+            send_email = utils.send_email
+            log_error = utils.log_error
+            print("成功使用动态导入")
 
 def main():
     try:
@@ -49,32 +68,28 @@ def main():
         print("初始化分析器...")
         analyzer = LotteryAnalyzer()
         
-        # 确保数据不为空
         if analyzer.df.empty:
             print("错误：未获取到有效数据，终止分析")
             return
         
         print(f"原始数据记录数: {len(analyzer.df)}")
         
-        # 添加时序特征（关键优化）
+        # 添加特征
         print("添加时序特征...")
         analyzer.df = add_temporal_features(analyzer.df)
         
-        # 添加农历特征
         print("添加农历特征...")
         analyzer.df = add_lunar_features(analyzer.df)
         
-        # 添加节日特征
         print("添加节日特征...")
         analyzer.df = add_festival_features(analyzer.df)
         
-        # 添加季节特征
         print("添加季节特征...")
         analyzer.df = add_season_features(analyzer.df)
         
         print(f"特征工程后数据记录数: {len(analyzer.df)}")
         
-        # 生成分析报告
+        # 生成报告
         print("\n生成分析报告...")
         report = analyzer.generate_report()
         
@@ -99,11 +114,9 @@ def main():
         print("=" * 50)
         
     except Exception as e:
-        # 记录完整错误信息
         error_msg = f"分析任务失败: {str(e)}\n\n{traceback.format_exc()}"
         print(error_msg)
         
-        # 记录到错误日志
         log_error({
             'draw_number': 'SYSTEM_ERROR',
             'date': datetime.now().strftime('%Y-%m-%d'),
@@ -114,7 +127,6 @@ def main():
             'month': datetime.now().month
         })
         
-        # 发送错误通知
         ding_webhook = os.getenv("DINGTALK_WEBHOOK")
         email_receiver = os.getenv("EMAIL_RECEIVER") or os.getenv("EMAIL_USER")
         
