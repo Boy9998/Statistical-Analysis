@@ -1,12 +1,14 @@
 import pandas as pd
 import numpy as np
-from src.utils import fetch_historical_data, zodiac_mapping, log_error  # 添加log_error导入
+from src.utils import fetch_historical_data, zodiac_mapping
 from config import BACKTEST_WINDOW
 from datetime import datetime, timedelta
 import holidays
 import re
-from lunarcalendar import Converter, Solar, Lunar
+from lunarcalendar import Converter, Solar, Lunar  # 精确农历计算
 from collections import defaultdict
+import os
+import csv
 
 class StrategyManager:
     """策略管理器，根据回测准确率动态调整预测权重"""
@@ -50,20 +52,13 @@ class StrategyManager:
         print(f"调整后权重: {self.weights}")
 
 class LotteryAnalyzer:
-    def __init__(self, df=None):
+    def __init__(self):
         """初始化分析器，获取历史数据并处理生肖映射"""
-        if df is not None:
-            self.df = df
-            print(f"使用提供的 {len(self.df)} 条历史开奖记录")
-        else:
-            print("开始获取历史数据...")
-            self.df = fetch_historical_data()
-            if not self.df.empty:
-                print(f"成功获取 {len(self.df)} 条历史开奖记录")
-            else:
-                print("警告：未获取到任何有效数据")
-        
+        print("开始获取历史数据...")
+        self.df = fetch_historical_data()
         if not self.df.empty:
+            print(f"成功获取 {len(self.df)} 条历史开奖记录")
+            
             # 应用基于年份的动态生肖映射
             self.df['zodiac'] = self.df.apply(
                 lambda row: zodiac_mapping(row['special'], row['year']), axis=1
@@ -84,7 +79,7 @@ class LotteryAnalyzer:
             self.df['festival'] = self.df['date'].apply(self.detect_festival)
             self.df['season'] = self.df['date'].apply(self.get_season)
             
-            # 添加基础时序特征（修复添加）
+            # 添加基础时序特征
             print("添加基础时序特征...")
             self.df = self.add_temporal_features(self.df)
             
@@ -266,60 +261,62 @@ class LotteryAnalyzer:
         }
     
     def backtest_strategy(self):
-        """严格回测预测策略（基于最近200期） - 修复版本"""
+        """严格回测预测策略（基于固定200期窗口）"""
         if self.df.empty:
             print("无法回测 - 数据为空")
             return pd.DataFrame(), 0.0
         
-        if len(self.df) < BACKTEST_WINDOW + 1:  # 需要至少201期数据
-            print(f"警告：数据不足{BACKTEST_WINDOW + 1}期，实际只有{len(self.df)}期")
+        total_length = len(self.df)
+        # 需要至少201条数据：200期训练，1期测试
+        if total_length < BACKTEST_WINDOW + 1:
+            print(f"警告：数据不足{BACKTEST_WINDOW+1}期，实际只有{total_length}期")
             return pd.DataFrame(), 0.0
         
-        print(f"开始回测策略（固定{BACKTEST_WINDOW}期窗口）...")
+        print(f"开始回测策略（固定窗口{BACKTEST_WINDOW}期）...")
         results = []
         
-        # 使用固定窗口大小的滑动窗口回测
-        for i in range(BACKTEST_WINDOW, len(self.df) - 1):
-            # 获取训练数据 (固定200期窗口)
-            train = self.df.iloc[i - BACKTEST_WINDOW:i].copy()
+        # 使用固定窗口滑动回测
+        for i in range(BACKTEST_WINDOW, total_length - 1):
+            # 训练数据：固定200期窗口 [i-BACKTEST_WINDOW, i-1]
+            train = self.df.iloc[i - BACKTEST_WINDOW:i]
             
-            # 获取测试数据 (下一期)
-            test = self.df.iloc[i + 1:i + 2]
+            # 测试数据：下一期 [i]
+            test = self.df.iloc[i:i + 1]
             
-            # 创建分析器实例并传入训练数据
-            analyzer = LotteryAnalyzer(df=train)
-            
-            # 进行预测
-            prediction = analyzer.predict_next()
-            actual = test['zodiac'].values[0]
-            predicted_zodiacs = prediction.get('prediction', [])
-            
-            # 检查是否命中
-            is_hit = 1 if actual in predicted_zodiacs else 0
+            # 获取预测
+            last_zodiac = train.iloc[-1]['zodiac']
+            target_date = test['date'].iloc[0]
+            prediction = self._generate_prediction(train, last_zodiac, target_date)
+            prediction = self.apply_pattern_enhancement(prediction, last_zodiac, target_date, train)
             
             # 记录结果
+            actual = test['zodiac'].iloc[0]
+            is_hit = 1 if actual in prediction else 0
+            
+            # 记录错误日志（如果未命中）
+            if not is_hit:
+                error_data = {
+                    'draw_number': test['expect'].iloc[0],
+                    'date': test['date'].dt.strftime('%Y-%m-%d').iloc[0],
+                    'actual_zodiac': actual,
+                    'predicted_zodiacs': ",".join(prediction),
+                    'last_zodiac': last_zodiac,
+                    'weekday': test['weekday'].iloc[0],
+                    'month': test['month'].iloc[0]
+                }
+                self.log_error(error_data)
+            
             results.append({
-                '期号': test['expect'].values[0],
-                '日期': test['date'].values[0],
-                '上期生肖': train.iloc[-1]['zodiac'],
+                '期号': test['expect'].iloc[0],
+                '上期生肖': last_zodiac,
                 '实际生肖': actual,
-                '预测生肖': ", ".join(predicted_zodiacs) if predicted_zodiacs else "无预测",
+                '预测生肖': ", ".join(prediction),
                 '是否命中': is_hit
             })
             
-            # 记录错误日志
-            if not is_hit:
-                error_data = {
-                    'draw_number': test['expect'].values[0],
-                    'date': test['date'].values[0],
-                    'actual_zodiac': actual,
-                    'predicted_zodiacs': ",".join(predicted_zodiacs) if predicted_zodiacs else "无预测",
-                    'last_zodiac': train.iloc[-1]['zodiac'],
-                    'weekday': test['weekday'].values[0],
-                    'month': test['month'].values[0],
-                    'lunar_month': test['lunar'].apply(lambda x: x.month).values[0] if 'lunar' in test else None
-                }
-                log_error(error_data)
+            # 打印进度
+            if (i - BACKTEST_WINDOW) % 50 == 0:
+                print(f"回测进度: {i - BACKTEST_WINDOW + 1}/{total_length - BACKTEST_WINDOW - 1} 期")
         
         result_df = pd.DataFrame(results)
         if not result_df.empty:
@@ -334,6 +331,28 @@ class LotteryAnalyzer:
             print("回测完成: 无有效结果")
         
         return result_df, accuracy
+    
+    def log_error(self, error_data):
+        """记录预测错误到CSV文件"""
+        from config import ERROR_LOG_PATH
+        
+        # 确保目录存在
+        os.makedirs(os.path.dirname(ERROR_LOG_PATH), exist_ok=True)
+        
+        # 文件头
+        fieldnames = ['timestamp', 'draw_number', 'date', 'actual_zodiac', 
+                     'predicted_zodiacs', 'last_zodiac', 'weekday', 'month']
+        
+        # 添加时间戳
+        error_data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 写入文件
+        file_exists = os.path.isfile(ERROR_LOG_PATH)
+        with open(ERROR_LOG_PATH, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(error_data)
     
     def _generate_prediction(self, data, last_zodiac, target_date):
         """生成预测结果（核心逻辑）"""
