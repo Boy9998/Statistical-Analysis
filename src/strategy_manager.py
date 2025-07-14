@@ -86,7 +86,7 @@ class StrategyManager:
         print("因子表现更新:", factor_accuracy)
     
     def evaluate_factor_validity(self, df, window=100):
-        """回测验证因子有效性"""
+        """回测验证因子有效性 - 修复数据不足问题"""
         if len(df) < window:
             print(f"数据不足{window}期，无法进行因子有效性验证")
             return {}
@@ -103,13 +103,21 @@ class StrategyManager:
         trans_acc = self._validate_transition_factor(recent)
         factor_scores['transition'] = trans_acc
         
-        # 3. 季节因子验证
-        season_acc = self._validate_season_factor(recent)
-        factor_scores['season'] = season_acc
+        # 3. 季节因子验证 - 确保数据中有季节列
+        if 'season' in recent.columns:
+            season_acc = self._validate_season_factor(recent)
+            factor_scores['season'] = season_acc
+        else:
+            print("警告: 数据中缺少'season'列，跳过季节因子验证")
+            factor_scores['season'] = 0.0
         
-        # 4. 节日因子验证
-        festival_acc = self._validate_festival_factor(recent)
-        factor_scores['festival'] = festival_acc
+        # 4. 节日因子验证 - 确保数据中有节日列
+        if 'is_festival' in recent.columns:
+            festival_acc = self._validate_festival_factor(recent)
+            factor_scores['festival'] = festival_acc
+        else:
+            print("警告: 数据中缺少'is_festival'列，跳过节日因子验证")
+            factor_scores['festival'] = 0.0
         
         # 5. 滚动窗口因子验证
         rolling_acc = self._validate_rolling_factor(recent)
@@ -145,9 +153,10 @@ class StrategyManager:
             # 使用历史数据计算频率
             freq = df['zodiac'].iloc[:i].value_counts(normalize=True)
             # 预测最高频率的生肖
-            pred = freq.idxmax()
-            predictions.append(pred)
-            actuals.append(df['zodiac'].iloc[i])
+            pred = freq.idxmax() if not freq.empty else None
+            if pred:
+                predictions.append(pred)
+                actuals.append(df['zodiac'].iloc[i])
         
         return accuracy_score(actuals, predictions) if predictions else 0
     
@@ -182,7 +191,7 @@ class StrategyManager:
         # 检查是否存在'season'列
         if 'season' not in df.columns:
             print("警告: 数据中缺少'season'列，无法验证季节因子")
-            return 0
+            return 0.0
             
         predictions = []
         actuals = []
@@ -196,9 +205,10 @@ class StrategyManager:
             if not season_data.empty:
                 # 预测该季节出现频率最高的生肖
                 freq = season_data['zodiac'].value_counts(normalize=True)
-                pred = freq.idxmax()
-                predictions.append(pred)
-                actuals.append(df['zodiac'].iloc[i])
+                pred = freq.idxmax() if not freq.empty else None
+                if pred:
+                    predictions.append(pred)
+                    actuals.append(df['zodiac'].iloc[i])
         
         return accuracy_score(actuals, predictions) if predictions else 0
     
@@ -207,7 +217,7 @@ class StrategyManager:
         # 检查是否存在'is_festival'列
         if 'is_festival' not in df.columns:
             print("警告: 数据中缺少'is_festival'列，无法验证节日因子")
-            return 0
+            return 0.0
             
         predictions = []
         actuals = []
@@ -221,17 +231,23 @@ class StrategyManager:
                 if not festival_data.empty:
                     # 预测节日出现频率最高的生肖
                     freq = festival_data['zodiac'].value_counts(normalize=True)
-                    pred = freq.idxmax()
-                    predictions.append(pred)
-                    actuals.append(df['zodiac'].iloc[i])
+                    pred = freq.idxmax() if not freq.empty else None
+                    if pred:
+                        predictions.append(pred)
+                        actuals.append(df['zodiac'].iloc[i])
         
         return accuracy_score(actuals, predictions) if predictions else 0
     
     def _validate_rolling_factor(self, df):
-        """验证滚动窗口因子有效性"""
+        """验证滚动窗口因子有效性 - 修复索引问题"""
         predictions_7d = []
         predictions_30d = []
         actuals = []
+        
+        # 确保有足够的数据
+        if len(df) < 30:
+            print("数据不足30期，无法验证滚动窗口因子")
+            return {'rolling_7d': 0, 'rolling_30d': 0}
         
         for i in range(30, len(df)):
             # 7天滚动窗口
@@ -277,10 +293,15 @@ class StrategyManager:
             from sklearn.ensemble import RandomForestClassifier
             from sklearn.preprocessing import LabelEncoder
             
-            # 准备数据
-            X = df.drop(columns=['zodiac', 'date', 'expect', 'special'])
-            # 只保留数值型特征
-            X = X.select_dtypes(include=['number'])
+            # 准备数据 - 只使用数值型特征
+            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+            X = df[numeric_cols].copy()
+            
+            # 移除不必要的列
+            for col in ['date', 'expect', 'special']:
+                if col in X.columns:
+                    X.drop(columns=[col], inplace=True)
+            
             y = df['zodiac']
             
             # 检查数据有效性
@@ -362,7 +383,7 @@ class StrategyManager:
         recent = df.iloc[-window:].copy()
         
         # 创建组合列：上期生肖-本期生肖
-        recent.loc[:, 'combo'] = recent['zodiac'].shift() + '-' + recent['zodiac']
+        recent['combo'] = recent['zodiac'].shift() + '-' + recent['zodiac']
         
         # 删除NaN值
         recent = recent.dropna(subset=['combo'])
@@ -437,10 +458,10 @@ class StrategyManager:
         # 2. 转移概率预测
         trans_pred = self._transition_prediction(last_zodiac)
         
-        # 3. 季节因子预测 - 传递整个特征行
+        # 3. 季节因子预测 - 修复类型错误
         season_pred = self._season_prediction(features)
         
-        # 4. 节日因子预测 - 传递整个特征行
+        # 4. 节日因子预测 - 修复类型错误
         festival_pred = self._festival_prediction(features)
         
         # 5. 滚动窗口预测
@@ -473,22 +494,34 @@ class StrategyManager:
         """基于频率的预测"""
         # 获取各生肖频率特征
         zodiac_freq = {z: features[f'freq_{z}'] for z in self.zodiacs if f'freq_{z}' in features}
+        if not zodiac_freq:
+            return []
         sorted_zodiac = sorted(zodiac_freq.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
+        return [z for z, _ in sorted_zodiac[:3]]
     
     def _transition_prediction(self, last_zodiac):
         """基于转移概率的预测"""
+        if not self.combo_probs:
+            return []
+        
         # 获取各生肖转移概率
         trans_probs = {z: self.combo_probs.get(f"{last_zodiac}-{z}", 0) for z in self.zodiacs}
         sorted_zodiac = sorted(trans_probs.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
+        return [z for z, _ in sorted_zodiac[:3]]
     
     def _season_prediction(self, features):
         """基于季节的预测 - 修复类型错误"""
-        # 获取季节特征
-        season_probs = {z: features[f'season_{z}'] for z in self.zodiacs if f'season_{z}' in features}
+        # 获取季节特征 - 确保传入的是Series或dict
+        if not isinstance(features, (pd.Series, dict)):
+            print(f"错误: 季节预测需要Series或dict, 得到 {type(features)}")
+            return []
+            
+        season_probs = {z: features[f'season_{z}'] for z in self.zodiacs 
+                       if f'season_{z}' in features}
+        if not season_probs:
+            return []
         sorted_zodiac = sorted(season_probs.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:2]] if sorted_zodiac else []
+        return [z for z, _ in sorted_zodiac[:2]]
     
     def _festival_prediction(self, features):
         """基于节日的预测 - 修复类型错误"""
@@ -496,20 +529,47 @@ class StrategyManager:
         if not features.get('is_festival', False):
             return []
         
-        # 获取节日特征
-        festival_probs = {z: features[f'festival_{z}'] for z in self.zodiacs if f'festival_{z}' in features}
+        # 获取节日特征 - 确保传入的是Series或dict
+        if not isinstance(features, (pd.Series, dict)):
+            print(f"错误: 节日预测需要Series或dict, 得到 {type(features)}")
+            return []
+            
+        festival_probs = {z: features[f'festival_{z}'] for z in self.zodiacs 
+                        if f'festival_{z}' in features}
+        if not festival_probs:
+            return []
         sorted_zodiac = sorted(festival_probs.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:2]] if sorted_zodiac else []
+        return [z for z, _ in sorted_zodiac[:2]]
     
     def _rolling_prediction(self, features):
-        """基于滚动窗口的预测"""
+        """基于滚动窗口的预测 - 修复Series比较错误"""
         # 7天滚动窗口
-        rolling_7d = {z: features[f'rolling_7d_{z}'] for z in self.zodiacs if f'rolling_7d_{z}' in features}
+        rolling_7d = {}
+        for z in self.zodiacs:
+            feature_name = f'rolling_7d_{z}'
+            if feature_name in features:
+                # 确保值是标量而非Series
+                value = features[feature_name]
+                if isinstance(value, pd.Series):
+                    # 取最后一个值
+                    value = value.iloc[-1] if not value.empty else 0
+                rolling_7d[z] = value
+        
         sorted_7d = sorted(rolling_7d.items(), key=lambda x: x[1], reverse=True)
         pred_7d = [z for z, _ in sorted_7d[:2]] if sorted_7d else []
         
         # 30天滚动窗口
-        rolling_30d = {z: features[f'rolling_30d_{z}'] for z in self.zodiacs if f'rolling_30d_{z}' in features}
+        rolling_30d = {}
+        for z in self.zodiacs:
+            feature_name = f'rolling_30d_{z}'
+            if feature_name in features:
+                # 确保值是标量而非Series
+                value = features[feature_name]
+                if isinstance(value, pd.Series):
+                    # 取最后一个值
+                    value = value.iloc[-1] if not value.empty else 0
+                rolling_30d[z] = value
+        
         sorted_30d = sorted(rolling_30d.items(), key=lambda x: x[1], reverse=True)
         pred_30d = [z for z, _ in sorted_30d[:2]] if sorted_30d else []
         
@@ -530,7 +590,11 @@ class StrategyManager:
             if '_' in feature:
                 zodiac = feature.split('_')[-1]
                 if zodiac in self.zodiacs and feature in features:
-                    feature_scores[zodiac] += features[feature] * imp
+                    # 确保值是标量
+                    value = features[feature]
+                    if isinstance(value, pd.Series):
+                        value = value.iloc[-1] if not value.empty else 0
+                    feature_scores[zodiac] += value * imp
         
         sorted_zodiac = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
         return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
@@ -550,7 +614,7 @@ class StrategyManager:
         
         # 按得分排序
         sorted_zodiac = sorted(zodiac_scores.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
+        return [z for z, _ in sorted_zodiac[:5]]  # 返回前5个预测结果
     
     @property
     def zodiacs(self):
