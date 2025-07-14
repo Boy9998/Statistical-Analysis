@@ -1,6 +1,7 @@
 import os
 import sys
 import traceback
+import numpy as np
 from datetime import datetime
 
 # 确保正确导入路径
@@ -13,7 +14,13 @@ print(f"系统路径: {sys.path}")
 
 try:
     # 尝试从 src 包导入
-    from src.data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
+    from src.data_processor import (
+        add_temporal_features, 
+        add_lunar_features, 
+        add_festival_features, 
+        add_season_features,
+        add_rolling_features
+    )
     from src.analysis import LotteryAnalyzer
     from src.utils import send_dingtalk, send_email, log_error
     print("成功从 src 包导入模块")
@@ -21,7 +28,13 @@ except ImportError as e:
     print(f"从 src 包导入失败: {e}")
     try:
         # 尝试直接导入模块
-        from data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
+        from data_processor import (
+            add_temporal_features, 
+            add_lunar_features, 
+            add_festival_features, 
+            add_season_features,
+            add_rolling_features
+        )
         from analysis import LotteryAnalyzer
         from utils import send_dingtalk, send_email, log_error
         print("成功直接导入模块")
@@ -29,7 +42,13 @@ except ImportError as e:
         print(f"直接导入失败: {e}")
         try:
             # 尝试相对导入
-            from .data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features
+            from .data_processor import (
+                add_temporal_features, 
+                add_lunar_features, 
+                add_festival_features, 
+                add_season_features,
+                add_rolling_features
+            )
             from .analysis import LotteryAnalyzer
             from .utils import send_dingtalk, send_email, log_error
             print("成功使用相对导入")
@@ -44,18 +63,41 @@ except ImportError as e:
                 spec.loader.exec_module(module)
                 return module
             
-            data_processor = load_module(os.path.join(current_dir, "src", "data_processor.py"))
-            analysis = load_module(os.path.join(current_dir, "src", "analysis.py"))
-            utils = load_module(os.path.join(current_dir, "src", "utils.py"))
+            # 加载各个模块
+            data_processor_path = os.path.join(current_dir, "src", "data_processor.py")
+            analysis_path = os.path.join(current_dir, "src", "analysis.py")
+            utils_path = os.path.join(current_dir, "src", "utils.py")
             
-            add_temporal_features = data_processor.add_temporal_features
-            add_lunar_features = data_processor.add_lunar_features
-            add_festival_features = data_processor.add_festival_features
-            add_season_features = data_processor.add_season_features
-            LotteryAnalyzer = analysis.LotteryAnalyzer
-            send_dingtalk = utils.send_dingtalk
-            send_email = utils.send_email
-            log_error = utils.log_error
+            if os.path.exists(data_processor_path):
+                data_processor = load_module(data_processor_path)
+                add_temporal_features = data_processor.add_temporal_features
+                add_lunar_features = data_processor.add_lunar_features
+                add_festival_features = data_processor.add_festival_features
+                add_season_features = data_processor.add_season_features
+                add_rolling_features = data_processor.add_rolling_features
+                print("成功加载 data_processor 模块")
+            else:
+                print(f"错误: 文件不存在 {data_processor_path}")
+                raise ImportError(f"文件不存在 {data_processor_path}")
+            
+            if os.path.exists(analysis_path):
+                analysis = load_module(analysis_path)
+                LotteryAnalyzer = analysis.LotteryAnalyzer
+                print("成功加载 analysis 模块")
+            else:
+                print(f"错误: 文件不存在 {analysis_path}")
+                raise ImportError(f"文件不存在 {analysis_path}")
+            
+            if os.path.exists(utils_path):
+                utils = load_module(utils_path)
+                send_dingtalk = utils.send_dingtalk
+                send_email = utils.send_email
+                log_error = utils.log_error
+                print("成功加载 utils 模块")
+            else:
+                print(f"错误: 文件不存在 {utils_path}")
+                raise ImportError(f"文件不存在 {utils_path}")
+            
             print("成功使用动态导入")
 
 def main():
@@ -74,7 +116,7 @@ def main():
         
         print(f"原始数据记录数: {len(analyzer.df)}")
         
-        # 添加特征
+        # 添加基础特征
         print("添加时序特征...")
         analyzer.df = add_temporal_features(analyzer.df)
         
@@ -87,7 +129,17 @@ def main():
         print("添加季节特征...")
         analyzer.df = add_season_features(analyzer.df)
         
+        # 添加滚动窗口特征
+        print("添加滚动窗口特征...")
+        analyzer.df = add_rolling_features(analyzer.df)
+        
+        # 检查特征是否添加成功
+        rolling_features = [col for col in analyzer.df.columns if col.startswith('rolling_')]
+        heat_index_features = [col for col in analyzer.df.columns if col.startswith('heat_index_')]
+        
         print(f"特征工程后数据记录数: {len(analyzer.df)}")
+        print(f"添加的滚动特征数量: {len(rolling_features)}")
+        print(f"添加的热度指数特征数量: {len(heat_index_features)}")
         
         # 生成报告
         print("\n生成分析报告...")
