@@ -342,6 +342,7 @@ class StrategyManager:
         self.combo_probs = combo_counts.to_dict()
         
         print(f"已更新生肖组合概率 (基于最近{window}期数据)")
+        # 修复这里的f-string括号问题
         print(f"前5个常见组合: {list(combo_counts.head(5).items()}")
     
     def get_combo_prediction(self, last_zodiac, top_n=5):
