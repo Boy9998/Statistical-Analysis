@@ -179,6 +179,11 @@ class StrategyManager:
     
     def _validate_season_factor(self, df):
         """验证季节因子有效性"""
+        # 检查是否存在'season'列
+        if 'season' not in df.columns:
+            print("警告: 数据中缺少'season'列，无法验证季节因子")
+            return 0
+            
         predictions = []
         actuals = []
         
@@ -199,6 +204,11 @@ class StrategyManager:
     
     def _validate_festival_factor(self, df):
         """验证节日因子有效性"""
+        # 检查是否存在'is_festival'列
+        if 'is_festival' not in df.columns:
+            print("警告: 数据中缺少'is_festival'列，无法验证节日因子")
+            return 0
+            
         predictions = []
         actuals = []
         
@@ -343,16 +353,16 @@ class StrategyManager:
         print(f"基于特征重要性更新权重: {self.weights}")
     
     def update_combo_probs(self, df, window=100):
-        """更新生肖组合概率"""
+        """更新生肖组合概率 - 修复SettingWithCopyWarning"""
         if len(df) < window:
             print(f"数据不足{window}期，无法计算组合概率")
             return
         
-        # 使用最近window期数据
-        recent = df.iloc[-window:]
+        # 使用最近window期数据 - 创建副本避免警告
+        recent = df.iloc[-window:].copy()
         
         # 创建组合列：上期生肖-本期生肖
-        recent['combo'] = recent['zodiac'].shift() + '-' + recent['zodiac']
+        recent.loc[:, 'combo'] = recent['zodiac'].shift() + '-' + recent['zodiac']
         
         # 删除NaN值
         recent = recent.dropna(subset=['combo'])
@@ -420,18 +430,18 @@ class StrategyManager:
         return report
     
     def generate_prediction(self, features, last_zodiac):
-        """生成多因子综合预测"""
+        """生成多因子综合预测 - 修复类型错误"""
         # 1. 频率因子预测
         freq_pred = self._frequency_prediction(features)
         
         # 2. 转移概率预测
         trans_pred = self._transition_prediction(last_zodiac)
         
-        # 3. 季节因子预测
-        season_pred = self._season_prediction(features['season'])
+        # 3. 季节因子预测 - 传递整个特征行
+        season_pred = self._season_prediction(features)
         
-        # 4. 节日因子预测
-        festival_pred = self._festival_prediction(features['is_festival'])
+        # 4. 节日因子预测 - 传递整个特征行
+        festival_pred = self._festival_prediction(features)
         
         # 5. 滚动窗口预测
         rolling_pred = self._rolling_prediction(features)
@@ -462,43 +472,44 @@ class StrategyManager:
     def _frequency_prediction(self, features):
         """基于频率的预测"""
         # 获取各生肖频率特征
-        zodiac_freq = {z: features[f'freq_{z}'] for z in features.index if f'freq_{z}' in features}
+        zodiac_freq = {z: features[f'freq_{z}'] for z in self.zodiacs if f'freq_{z}' in features}
         sorted_zodiac = sorted(zodiac_freq.items(), key=lambda x: x[1], reverse=True)
         return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
     
     def _transition_prediction(self, last_zodiac):
         """基于转移概率的预测"""
         # 获取各生肖转移概率
-        trans_probs = {z: self.combo_probs.get(f"{last_zodiac}-{z}", 0) for z in self.combo_probs}
+        trans_probs = {z: self.combo_probs.get(f"{last_zodiac}-{z}", 0) for z in self.zodiacs}
         sorted_zodiac = sorted(trans_probs.items(), key=lambda x: x[1], reverse=True)
         return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
     
-    def _season_prediction(self, season):
-        """基于季节的预测"""
+    def _season_prediction(self, features):
+        """基于季节的预测 - 修复类型错误"""
         # 获取季节特征
-        season_probs = {z: season[f'season_{z}'] for z in season.index if f'season_{z}' in season}
+        season_probs = {z: features[f'season_{z}'] for z in self.zodiacs if f'season_{z}' in features}
         sorted_zodiac = sorted(season_probs.items(), key=lambda x: x[1], reverse=True)
         return [z for z, _ in sorted_zodiac[:2]] if sorted_zodiac else []
     
-    def _festival_prediction(self, is_festival):
-        """基于节日的预测"""
-        if not is_festival:
+    def _festival_prediction(self, features):
+        """基于节日的预测 - 修复类型错误"""
+        # 检查是否是节日
+        if not features.get('is_festival', False):
             return []
         
         # 获取节日特征
-        festival_probs = {z: is_festival[f'festival_{z}'] for z in is_festival.index if f'festival_{z}' in is_festival}
+        festival_probs = {z: features[f'festival_{z}'] for z in self.zodiacs if f'festival_{z}' in features}
         sorted_zodiac = sorted(festival_probs.items(), key=lambda x: x[1], reverse=True)
         return [z for z, _ in sorted_zodiac[:2]] if sorted_zodiac else []
     
     def _rolling_prediction(self, features):
         """基于滚动窗口的预测"""
         # 7天滚动窗口
-        rolling_7d = {z: features[f'rolling_7d_{z}'] for z in features.index if f'rolling_7d_{z}' in features}
+        rolling_7d = {z: features[f'rolling_7d_{z}'] for z in self.zodiacs if f'rolling_7d_{z}' in features}
         sorted_7d = sorted(rolling_7d.items(), key=lambda x: x[1], reverse=True)
         pred_7d = [z for z, _ in sorted_7d[:2]] if sorted_7d else []
         
         # 30天滚动窗口
-        rolling_30d = {z: features[f'rolling_30d_{z}'] for z in features.index if f'rolling_30d_{z}' in features}
+        rolling_30d = {z: features[f'rolling_30d_{z}'] for z in self.zodiacs if f'rolling_30d_{z}' in features}
         sorted_30d = sorted(rolling_30d.items(), key=lambda x: x[1], reverse=True)
         pred_30d = [z for z, _ in sorted_30d[:2]] if sorted_30d else []
         
@@ -518,7 +529,7 @@ class StrategyManager:
             # 解析特征对应的生肖
             if '_' in feature:
                 zodiac = feature.split('_')[-1]
-                if zodiac in features.index and feature in features:
+                if zodiac in self.zodiacs and feature in features:
                     feature_scores[zodiac] += features[feature] * imp
         
         sorted_zodiac = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
@@ -540,3 +551,8 @@ class StrategyManager:
         # 按得分排序
         sorted_zodiac = sorted(zodiac_scores.items(), key=lambda x: x[1], reverse=True)
         return [z for z, _ in sorted_zodiac[:3]] if sorted_zodiac else []
+    
+    @property
+    def zodiacs(self):
+        """生肖列表属性"""
+        return ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
