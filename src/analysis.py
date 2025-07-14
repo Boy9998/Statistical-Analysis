@@ -23,21 +23,31 @@ class LotteryAnalyzer:
             )
             
             # 确保生肖数据有效
-            valid_zodiacs = self.df['zodiac'].isin(["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"])
+            self.zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
+            valid_zodiacs = self.df['zodiac'].isin(self.zodiacs)
             if not valid_zodiacs.all():
                 invalid_count = len(self.df) - valid_zodiacs.sum()
                 print(f"警告：发现 {invalid_count} 条记录的生肖映射无效")
                 self.df = self.df[valid_zodiacs]
             
-            self.zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
-            
             # 添加农历和节日信息
             print("添加农历和节日信息...")
             self.df['lunar'] = self.df['date'].apply(self.get_lunar_date)
             self.df['festival'] = self.df['date'].apply(self.detect_festival)
-            # 新增 is_festival 列
             self.df['is_festival'] = self.df['festival'] != "无"
             self.df['season'] = self.df['date'].apply(self.get_season)
+            
+            # 添加时序特征
+            print("添加时序特征...")
+            self.df['weekday'] = self.df['date'].dt.weekday  # 0=周一, 6=周日
+            self.df['month'] = self.df['date'].dt.month
+            self.df['quarter'] = self.df['date'].dt.quarter
+            
+            # 添加生肖特征（关键修复）
+            self.add_zodiac_features()
+            
+            # 添加滚动窗口特征（关键修复）
+            self.add_rolling_features()
             
             # 初始化增强的策略管理器
             self.strategy_manager = StrategyManager()
@@ -57,6 +67,52 @@ class LotteryAnalyzer:
             print("警告：未获取到任何有效数据")
             self.strategy_manager = StrategyManager()
             self.patterns = {}
+    
+    def add_zodiac_features(self):
+        """添加生肖相关特征 - 关键修复"""
+        print("添加生肖特征...")
+        
+        # 1. 生肖频率特征
+        zodiac_counts = self.df['zodiac'].value_counts(normalize=True)
+        for zodiac in self.zodiacs:
+            self.df[f'freq_{zodiac}'] = zodiac_counts.get(zodiac, 0.0)
+        
+        # 2. 季节生肖特征
+        season_zodiac_counts = {}
+        for season in ['春', '夏', '秋', '冬']:
+            season_data = self.df[self.df['season'] == season]
+            if not season_data.empty:
+                counts = season_data['zodiac'].value_counts(normalize=True)
+                season_zodiac_counts[season] = counts
+                for zodiac in self.zodiacs:
+                    self.df[f'season_{zodiac}'] = counts.get(zodiac, 0.0)
+        
+        # 3. 节日生肖特征
+        festival_data = self.df[self.df['is_festival']]
+        if not festival_data.empty:
+            festival_counts = festival_data['zodiac'].value_counts(normalize=True)
+            for zodiac in self.zodiacs:
+                self.df[f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
+        
+        print(f"已添加生肖特征: {len(self.zodiacs)*3}个新特征")
+    
+    def add_rolling_features(self):
+        """添加滚动窗口特征 - 关键修复"""
+        print("添加滚动窗口特征...")
+        windows = [7, 30]  # 7天和30天窗口
+        
+        for window in windows:
+            # 为每个生肖添加滚动窗口特征
+            for zodiac in self.zodiacs:
+                # 创建生肖出现标志
+                self.df[f'occur_{zodiac}'] = (self.df['zodiac'] == zodiac).astype(int)
+                
+                # 计算滚动频率
+                self.df[f'rolling_{window}d_{zodiac}'] = (
+                    self.df[f'occur_{zodiac}'].rolling(window=window, min_periods=1).mean()
+                )
+        
+        print(f"已添加滚动窗口特征: {len(windows)*len(self.zodiacs)}个新特征")
     
     def get_lunar_date(self, dt):
         """精确转换公历到农历"""
@@ -156,7 +212,7 @@ class LotteryAnalyzer:
         # 3. 节日效应模式
         festival_zodiacs = defaultdict(lambda: defaultdict(int))
         for idx, row in self.df.iterrows():
-            if row['is_festival']:  # 使用 is_festival 列
+            if row['is_festival']:
                 festival_zodiacs[row['festival']][row['zodiac']] += 1
         
         # 找出每个节日出现频率最高的生肖
@@ -219,13 +275,16 @@ class LotteryAnalyzer:
         print(f"开始回测策略（固定窗口{window}期）...")
         results = []
         
-        # 优化：避免在每次迭代中创建新的LotteryAnalyzer实例
         # 使用单个策略管理器处理整个回测过程
         strategy_manager = StrategyManager()
         
         for i in range(window, len(self.df)-1):
             # 训练数据：从 i-window 到 i-1 (共window期)
-            train = self.df.iloc[i-window:i]
+            train = self.df.iloc[i-window:i].copy()
+            
+            # 为训练数据添加特征（关键修复）
+            self.add_features_to_data(train)
+            
             # 测试数据：下一期 (i)
             test = self.df.iloc[i:i+1]
             
@@ -233,7 +292,7 @@ class LotteryAnalyzer:
             strategy_manager.update_combo_probs(train)
             strategy_manager.evaluate_factor_validity(train)
             
-            # 获取特征数据（确保包含所有必要特征）
+            # 获取特征数据
             feature_row = train.iloc[-1]
             last_zodiac = feature_row['zodiac']
             
@@ -279,6 +338,24 @@ class LotteryAnalyzer:
             print("回测完成: 无有效结果")
         
         return result_df, accuracy
+    
+    def add_features_to_data(self, df):
+        """为数据添加必要的特征"""
+        # 添加生肖频率特征
+        zodiac_counts = df['zodiac'].value_counts(normalize=True)
+        for zodiac in self.zodiacs:
+            df[f'freq_{zodiac}'] = zodiac_counts.get(zodiac, 0.0)
+        
+        # 添加季节生肖特征
+        for zodiac in self.zodiacs:
+            df[f'season_{zodiac}'] = 0.0
+        
+        # 添加节日生肖特征
+        festival_data = df[df['is_festival']]
+        if not festival_data.empty:
+            festival_counts = festival_data['zodiac'].value_counts(normalize=True)
+            for zodiac in self.zodiacs:
+                df[f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
     
     def apply_pattern_enhancement(self, prediction, last_zodiac, target_date, data):
         """应用历史模式增强预测"""
