@@ -2,7 +2,6 @@ import requests
 import pandas as pd
 import smtplib
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import os
 import json
 from datetime import datetime, timedelta
@@ -13,7 +12,7 @@ import base64
 import urllib.parse
 import time
 import re
-import csv
+import csv  # 新增导入
 
 def fetch_historical_data():
     """获取2023年至今的真实历史开奖数据"""
@@ -177,7 +176,7 @@ def send_dingtalk(message, webhook):
         headers = {"Content-Type": "application/json"}
         payload = {
             "msgtype": "text",
-            "text": {"content": f"每日彩报:\n{message}"}
+            "text": {"content": f"彩票分析报告:\n{message}"}
         }
         
         response = requests.post(signed_webhook, json=payload, headers=headers, timeout=10)
@@ -194,7 +193,7 @@ def send_dingtalk(message, webhook):
         return False
 
 def send_email(subject, content, receiver):
-    """发送专业分析邮件"""
+    """发送邮件通知"""
     sender = os.getenv("EMAIL_USER")
     password = os.getenv("EMAIL_PWD")
     
@@ -202,123 +201,14 @@ def send_email(subject, content, receiver):
         print("邮箱凭据未设置，跳过邮件发送")
         return False
     
-    print(f"准备发送专业邮件到: {receiver}...")
+    print(f"准备发送邮件到: {receiver}...")
     
     try:
-        # 创建邮件容器
-        msg = MIMEMultipart()
-        msg['Subject'] = f"料性分析报告 - {subject}"
+        # 创建邮件内容
+        msg = MIMEText(content, 'plain', 'utf-8')
+        msg['Subject'] = subject
         msg['From'] = sender
         msg['To'] = receiver
-        
-        # 创建HTML内容
-        html_content = f"""
-        <html>
-        <head>
-            <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-            <style>
-                body {{
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                    background-color: #f5f8fa;
-                    margin: 0;
-                    padding: 20px;
-                    color: #333;
-                }}
-                .email-container {{
-                    max-width: 700px;
-                    margin: 0 auto;
-                    background: white;
-                    border-radius: 8px;
-                    overflow: hidden;
-                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-                }}
-                .header {{
-                    background: linear-gradient(135deg, #1a5276, #2874a6);
-                    color: white;
-                    padding: 25px 30px;
-                    text-align: center;
-                }}
-                .header h1 {{
-                    margin: 0;
-                    font-size: 24px;
-                    font-weight: 600;
-                }}
-                .header .subtitle {{
-                    margin-top: 8px;
-                    font-size: 15px;
-                    opacity: 0.85;
-                }}
-                .content {{
-                    padding: 30px;
-                    line-height: 1.6;
-                }}
-                .report-section {{
-                    background: #f8f9f9;
-                    border-left: 4px solid #3498db;
-                    padding: 20px;
-                    border-radius: 4px;
-                    margin-bottom: 25px;
-                }}
-                .report-section pre {{
-                    font-family: 'Consolas', 'Monaco', monospace;
-                    white-space: pre-wrap;
-                    margin: 0;
-                }}
-                .footer {{
-                    text-align: center;
-                    padding: 20px;
-                    background: #f0f3f5;
-                    color: #7f8c8d;
-                    font-size: 13px;
-                    border-top: 1px solid #e0e6ea;
-                }}
-                .footer .system-info {{
-                    font-weight: 600;
-                    color: #2c3e50;
-                }}
-                .footer .copyright {{
-                    margin-top: 5px;
-                    font-size: 12px;
-                }}
-                .zodiac-icon {{
-                    font-size: 20px;
-                    margin-right: 5px;
-                    vertical-align: middle;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="email-container">
-                <div class="header">
-                    <h1>料性分析报告</h1>
-                    <div class="subtitle">
-                        {datetime.now().strftime('%Y年%m月%d日')} | 
-                    </div>
-                </div>
-                
-                <div class="content">
-                    <div class="report-section">
-                        <pre>{content}</pre>
-                    </div>
-                    
-                    <p style="color: #7f8c8d; font-size: 14px;">
-                        
-                    </p>
-                </div>
-                
-                <div class="footer">
-                    <div class="system-info">Statistical Analysis System v1.0</div>
-                    <div class="copyright">
-                        © {datetime.now().year} 
-                    </div>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        # 添加HTML内容
-        msg.attach(MIMEText(html_content, 'html', 'utf-8'))
         
         # 使用SMTP_SSL连接QQ邮箱的SMTP服务器
         server = smtplib.SMTP_SSL('smtp.qq.com', 465)
@@ -326,7 +216,7 @@ def send_email(subject, content, receiver):
         server.sendmail(sender, [receiver], msg.as_string())
         server.quit()
         
-        print("专业邮件发送成功")
+        print("邮件发送成功")
         return True
     except smtplib.SMTPAuthenticationError:
         print("邮件发送失败: 认证失败，请检查邮箱和授权码")
@@ -399,7 +289,7 @@ if __name__ == "__main__":
         print("钉钉环境变量未设置，跳过测试")
     
     if os.getenv("EMAIL_USER") and os.getenv("EMAIL_PWD"):
-        print("测试专业邮件通知...")
+        print("测试邮件通知...")
         send_email("测试邮件", test_message, os.getenv("EMAIL_USER"))
     else:
         print("邮件环境变量未设置，跳过测试")
