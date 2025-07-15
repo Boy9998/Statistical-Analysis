@@ -342,13 +342,13 @@ class LotteryAnalyzer:
             )
             actual = test['zodiac'].values[0]
             
-            # 记录结果 - 修复预测生肖格式（去掉空格）
+            # 记录结果
             is_hit = 1 if actual in prediction else 0
             results.append({
                 '期号': test['expect'].values[0],
                 '上期生肖': last_zodiac,
                 '实际生肖': actual,
-                '预测生肖': ",".join(prediction),  # 确保无空格
+                '预测生肖': ", ".join(prediction),
                 '是否命中': is_hit
             })
             
@@ -367,15 +367,6 @@ class LotteryAnalyzer:
         
         result_df = pd.DataFrame(results)
         if not result_df.empty:
-            # 转换期号为数值类型用于排序
-            result_df['期号数值'] = result_df['期号'].astype(int)
-            
-            # 去重处理 - 保留每个期号的最新结果
-            result_df = result_df.sort_values('期号数值').drop_duplicates(subset=['期号'], keep='last')
-            
-            # 按数值期号倒序排序
-            result_df = result_df.sort_values('期号数值', ascending=False)
-            
             accuracy = result_df['是否命中'].mean()
             hit_count = result_df['是否命中'].sum()
             print(f"回测完成: 准确率={accuracy:.2%}, 命中次数={hit_count}/{len(result_df)}")
@@ -534,36 +525,6 @@ class LotteryAnalyzer:
             'factor_predictions': factor_predictions
         }
     
-    def _generate_recent_table(self):
-        """生成最近10期预测结果表 - 修复排序和重复问题"""
-        if not hasattr(self, 'backtest_results') or self.backtest_results.empty:
-            return "\n无历史预测数据"
-        
-        # 创建副本避免修改原始数据
-        df = self.backtest_results.copy()
-        
-        # 确保期号为数值类型
-        if not pd.api.types.is_numeric_dtype(df['期号']):
-            df['期号数值'] = df['期号'].astype(int)
-        else:
-            df['期号数值'] = df['期号']
-        
-        # 按数值期号倒序排列获取真正最近10期
-        recent = df.sort_values('期号数值', ascending=False).head(10)
-        
-        # 构建对齐的表格
-        table = "\n期号      预测生肖            实际开奖    结果"
-        table += "\n============================================"
-        
-        for _, row in recent.iterrows():
-            mark = "✓" if row['是否命中'] else "✗"
-            # 格式化对齐
-            prediction_str = row['预测生肖']
-            actual_str = row['实际生肖']
-            table += f"\n{row['期号']}  {prediction_str:<15}  {actual_str:<5}  {mark}"
-        
-        return table
-    
     def generate_report(self):
         """生成符合要求的分析报告"""
         if self.df.empty:
@@ -580,8 +541,8 @@ class LotteryAnalyzer:
         # 生肖分析
         analysis = self.analyze_zodiac_patterns()
         
-        # 回测结果 - 存储到实例变量
-        self.backtest_results, accuracy = self.backtest_strategy()
+        # 回测结果
+        backtest_df, accuracy = self.backtest_strategy()
         
         # 预测下期
         prediction = self.predict_next()
@@ -622,9 +583,7 @@ class LotteryAnalyzer:
         
         回测结果（最近{BACKTEST_WINDOW}期）：
         - 准确率：{accuracy:.2%}
-        - 命中次数：{int(accuracy * len(self.backtest_results)) if not self.backtest_results.empty else 0}/{len(self.backtest_results) if not self.backtest_results.empty else 0}
-        
-        === 最近10期预测结果追踪 ==={self._generate_recent_table()}
+        - 命中次数：{int(accuracy * len(backtest_df)) if not backtest_df.empty else 0}/{len(backtest_df) if not backtest_df.empty else 0}
         
         下期预测：
         - 预测期号：{prediction['next_number']}
