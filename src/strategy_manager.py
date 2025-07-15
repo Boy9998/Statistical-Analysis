@@ -4,6 +4,7 @@ from collections import defaultdict
 import joblib
 import os
 from sklearn.metrics import accuracy_score
+from datetime import datetime
 
 # 导入ML_MODEL_PATH配置
 try:
@@ -16,6 +17,7 @@ except ImportError:
 
 # 确保目录存在
 os.makedirs(ML_MODEL_PATH, exist_ok=True)
+os.makedirs('error_analysis', exist_ok=True)
 
 class StrategyManager:
     def __init__(self):
@@ -35,41 +37,73 @@ class StrategyManager:
         self.feature_importance = None  # 存储特征重要性
         self.combo_probs = {}  # 生肖组合概率
         self.factor_validity = {}  # 因子有效性评分
-        print(f"初始化策略管理器: 权重={self.weights}")
+        self.special_attention_patterns = {}  # 需要特别关注的转移模式
+        self.zodiac_attention = defaultdict(int)  # 生肖关注度
+        self.error_learning_rate = 0.2  # 错误学习率
+        print(f"初始化策略管理器: 权重={self.weights} | 强化学习已启用")
     
-    def adjust(self, accuracy):
-        """根据准确率动态调整权重"""
+    def adjust(self, accuracy, error_patterns=None):
+        """根据准确率和错误模式动态调整权重 - 强化学习机制"""
         self.accuracy_history.append(accuracy)
         
         # 计算近期准确率趋势 (最近10次)
         trend = np.mean(self.accuracy_history[-10:]) if len(self.accuracy_history) >= 10 else accuracy
         
-        # 根据趋势调整权重
-        if trend < 0.35:
-            # 准确率低时增加组合概率和特征重要性权重
-            self.weights['combo'] = min(0.20, self.weights['combo'] + 0.05)
-            self.weights['feature_imp'] = min(0.20, self.weights['feature_imp'] + 0.05)
-            # 降低其他权重
-            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7d', 'rolling_30d']:
-                self.weights[factor] = max(0.05, self.weights[factor] - 0.01)
-        elif trend > 0.45:
-            # 准确率高时增加滚动窗口权重
-            self.weights['rolling_7d'] = min(0.20, self.weights['rolling_7d'] + 0.03)
-            self.weights['rolling_30d'] = min(0.20, self.weights['rolling_30d'] + 0.02)
-            # 降低其他权重
-            for factor in ['frequency', 'transition', 'season', 'festival', 'combo', 'feature_imp']:
-                self.weights[factor] = max(0.05, self.weights[factor] - 0.01)
+        # 根据趋势和错误模式调整权重
+        adjustment_made = False
         
-        # 根据因子有效性调整权重
+        # 1. 基于错误模式调整
+        if error_patterns:
+            for last_zodiac, patterns in error_patterns.items():
+                for actual, count in patterns.items():
+                    pattern_key = f"{last_zodiac}-{actual}"
+                    
+                    # 增加错误模式中实际出现生肖的权重
+                    if actual in self.zodiacs:
+                        # 增加权重，增加量与错误次数成正比
+                        adjustment = min(0.05, count * 0.005)
+                        if f'freq_{actual}' in self.weights:
+                            self.weights[f'freq_{actual}'] = min(0.25, self.weights.get(f'freq_{actual}', 0) + adjustment)
+                        adjustment_made = True
+                        print(f"错误学习调整: {last_zodiac}->{actual} 模式, 增加 {actual} 权重 +{adjustment:.3f}")
+                        
+                        # 记录特殊关注模式
+                        self.special_attention_patterns[pattern_key] = {
+                            'weight_multiplier': 1.5,
+                            'last_occurrence': datetime.now(),
+                            'error_count': count
+                        }
+        
+        # 2. 基于准确率趋势调整
+        if not adjustment_made:
+            if trend < 0.35:
+                # 准确率低时增加组合概率和特征重要性权重
+                self.weights['combo'] = min(0.25, self.weights['combo'] + 0.08)
+                self.weights['feature_imp'] = min(0.25, self.weights['feature_imp'] + 0.08)
+                # 降低其他权重
+                for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7d', 'rolling_30d']:
+                    self.weights[factor] = max(0.05, self.weights[factor] - 0.02)
+                print("趋势调整: 准确率低，增加组合和特征重要性权重")
+            elif trend > 0.45:
+                # 准确率高时增加滚动窗口权重
+                self.weights['rolling_7d'] = min(0.25, self.weights['rolling_7d'] + 0.05)
+                self.weights['rolling_30d'] = min(0.25, self.weights['rolling_30d'] + 0.04)
+                # 降低其他权重
+                for factor in ['frequency', 'transition', 'season', 'festival', 'combo', 'feature_imp']:
+                    self.weights[factor] = max(0.05, self.weights[factor] - 0.01)
+                print("趋势调整: 准确率高，增加滚动窗口权重")
+        
+        # 3. 根据因子有效性调整权重
         if self.factor_validity:
             total_validity = sum(self.factor_validity.values())
             for factor, validity in self.factor_validity.items():
                 if factor in self.weights:
-                    # 有效性评分占调整权重的50%
-                    validity_weight = 0.5 * (validity / total_validity)
-                    # 当前权重占50%
-                    current_weight = 0.5 * self.weights[factor]
+                    # 有效性评分占调整权重的70%
+                    validity_weight = 0.7 * (validity / total_validity)
+                    # 当前权重占30%
+                    current_weight = 0.3 * self.weights[factor]
                     self.weights[factor] = validity_weight + current_weight
+            print("因子有效性调整: 基于因子表现更新权重")
         
         # 归一化权重
         total = sum(self.weights.values())
@@ -86,7 +120,7 @@ class StrategyManager:
         print("因子表现更新:", factor_accuracy)
     
     def evaluate_factor_validity(self, df, window=100):
-        """回测验证因子有效性 - 修复数据不足问题"""
+        """回测验证因子有效性 - 增强版"""
         if len(df) < window:
             print(f"数据不足{window}期，无法进行因子有效性验证")
             return {}
@@ -103,7 +137,7 @@ class StrategyManager:
         trans_acc = self._validate_transition_factor(recent)
         factor_scores['transition'] = trans_acc
         
-        # 3. 季节因子验证 - 确保数据中有季节列
+        # 3. 季节因子验证
         if 'season' in recent.columns:
             season_acc = self._validate_season_factor(recent)
             factor_scores['season'] = season_acc
@@ -111,7 +145,7 @@ class StrategyManager:
             print("警告: 数据中缺少'season'列，跳过季节因子验证")
             factor_scores['season'] = 0.0
         
-        # 4. 节日因子验证 - 确保数据中有节日列
+        # 4. 节日因子验证
         if 'is_festival' in recent.columns:
             festival_acc = self._validate_festival_factor(recent)
             factor_scores['festival'] = festival_acc
@@ -188,11 +222,6 @@ class StrategyManager:
     
     def _validate_season_factor(self, df):
         """验证季节因子有效性"""
-        # 检查是否存在'season'列
-        if 'season' not in df.columns:
-            print("警告: 数据中缺少'season'列，无法验证季节因子")
-            return 0.0
-            
         predictions = []
         actuals = []
         
@@ -214,11 +243,6 @@ class StrategyManager:
     
     def _validate_festival_factor(self, df):
         """验证节日因子有效性"""
-        # 检查是否存在'is_festival'列
-        if 'is_festival' not in df.columns:
-            print("警告: 数据中缺少'is_festival'列，无法验证节日因子")
-            return 0.0
-            
         predictions = []
         actuals = []
         
@@ -239,15 +263,10 @@ class StrategyManager:
         return accuracy_score(actuals, predictions) if predictions else 0
     
     def _validate_rolling_factor(self, df):
-        """验证滚动窗口因子有效性 - 修复索引问题"""
+        """验证滚动窗口因子有效性"""
         predictions_7d = []
         predictions_30d = []
         actuals = []
-        
-        # 确保有足够的数据
-        if len(df) < 30:
-            print("数据不足30期，无法验证滚动窗口因子")
-            return {'rolling_7d': 0, 'rolling_30d': 0}
         
         for i in range(30, len(df)):
             # 7天滚动窗口
@@ -293,15 +312,10 @@ class StrategyManager:
             from sklearn.ensemble import RandomForestClassifier
             from sklearn.preprocessing import LabelEncoder
             
-            # 准备数据 - 只使用数值型特征
-            numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-            X = df[numeric_cols].copy()
-            
-            # 移除不必要的列
-            for col in ['date', 'expect', 'special']:
-                if col in X.columns:
-                    X.drop(columns=[col], inplace=True)
-            
+            # 准备数据
+            X = df.drop(columns=['zodiac', 'date', 'expect', 'special'])
+            # 只保留数值型特征
+            X = X.select_dtypes(include=['number'])
             y = df['zodiac']
             
             # 检查数据有效性
@@ -383,7 +397,7 @@ class StrategyManager:
         recent = df.iloc[-window:].copy()
         
         # 创建组合列：上期生肖-本期生肖
-        recent['combo'] = recent['zodiac'].shift() + '-' + recent['zodiac']
+        recent.loc[:, 'combo'] = recent['zodiac'].shift() + '-' + recent['zodiac']
         
         # 删除NaN值
         recent = recent.dropna(subset=['combo'])
@@ -448,20 +462,28 @@ class StrategyManager:
             for factor, validity in self.factor_validity.items():
                 report += f"- {factor}: {validity:.4f}\n"
         
+        # 特殊关注模式
+        if self.special_attention_patterns:
+            report += "\n特殊关注模式 (Top 3):\n"
+            sorted_patterns = sorted(self.special_attention_patterns.items(), 
+                                   key=lambda x: x[1]['error_count'], reverse=True)
+            for pattern, info in sorted_patterns[:3]:
+                report += f"- {pattern}: 错误次数={info['error_count']}, 权重倍数={info['weight_multiplier']}\n"
+        
         return report
     
     def generate_prediction(self, features, last_zodiac):
-        """生成多因子综合预测 - 修复类型错误"""
+        """生成多因子综合预测 - 集成错误学习"""
         # 1. 频率因子预测
         freq_pred = self._frequency_prediction(features)
         
         # 2. 转移概率预测
         trans_pred = self._transition_prediction(last_zodiac)
         
-        # 3. 季节因子预测 - 修复类型错误
+        # 3. 季节因子预测
         season_pred = self._season_prediction(features)
         
-        # 4. 节日因子预测 - 修复类型错误
+        # 4. 节日因子预测
         festival_pred = self._festival_prediction(features)
         
         # 5. 滚动窗口预测
@@ -488,7 +510,24 @@ class StrategyManager:
         # 加权融合预测
         final_prediction = self._fuse_predictions(all_predictions)
         
+        # 应用特殊关注模式增强
+        final_prediction = self._apply_special_attention(final_prediction, last_zodiac)
+        
         return final_prediction, all_predictions
+    
+    def _apply_special_attention(self, prediction, last_zodiac):
+        """应用特殊关注模式增强预测"""
+        # 检查是否有针对当前上期生肖的特殊关注模式
+        special_pattern = f"{last_zodiac}-"
+        for pattern, info in self.special_attention_patterns.items():
+            if pattern.startswith(special_pattern):
+                zodiac_to_boost = pattern.split('-')[1]
+                if zodiac_to_boost not in prediction:
+                    # 如果这个生肖不在预测中，替换掉得分最低的生肖
+                    prediction = prediction[:-1] + [zodiac_to_boost]
+                    print(f"特殊关注增强: 根据历史错误模式，增加 {zodiac_to_boost} 的优先级")
+                    break
+        return prediction
     
     def _frequency_prediction(self, features):
         """基于频率的预测"""
@@ -510,39 +549,29 @@ class StrategyManager:
         return [z for z, _ in sorted_zodiac[:3]]
     
     def _season_prediction(self, features):
-        """基于季节的预测 - 修复类型错误"""
-        # 获取季节特征 - 确保传入的是Series或dict
-        if not isinstance(features, (pd.Series, dict)):
-            print(f"错误: 季节预测需要Series或dict, 得到 {type(features)}")
-            return []
-            
-        season_probs = {z: features[f'season_{z}'] for z in self.zodiacs 
-                       if f'season_{z}' in features}
+        """基于季节的预测"""
+        # 获取季节特征
+        season_probs = {z: features[f'season_{z}'] for z in self.zodiacs if f'season_{z}' in features}
         if not season_probs:
             return []
         sorted_zodiac = sorted(season_probs.items(), key=lambda x: x[1], reverse=True)
         return [z for z, _ in sorted_zodiac[:2]]
     
     def _festival_prediction(self, features):
-        """基于节日的预测 - 修复类型错误"""
+        """基于节日的预测"""
         # 检查是否是节日
         if not features.get('is_festival', False):
             return []
         
-        # 获取节日特征 - 确保传入的是Series或dict
-        if not isinstance(features, (pd.Series, dict)):
-            print(f"错误: 节日预测需要Series或dict, 得到 {type(features)}")
-            return []
-            
-        festival_probs = {z: features[f'festival_{z}'] for z in self.zodiacs 
-                        if f'festival_{z}' in features}
+        # 获取节日特征
+        festival_probs = {z: features[f'festival_{z}'] for z in self.zodiacs if f'festival_{z}' in features}
         if not festival_probs:
             return []
         sorted_zodiac = sorted(festival_probs.items(), key=lambda x: x[1], reverse=True)
         return [z for z, _ in sorted_zodiac[:2]]
     
     def _rolling_prediction(self, features):
-        """基于滚动窗口的预测 - 修复Series比较错误"""
+        """基于滚动窗口的预测"""
         # 7天滚动窗口
         rolling_7d = {}
         for z in self.zodiacs:
@@ -606,10 +635,15 @@ class StrategyManager:
         
         # 为每个因子的预测结果分配分数
         for factor, preds in all_predictions.items():
-            weight = self.weights[factor]
+            weight = self.weights.get(factor, 0.1)
             for i, zodiac in enumerate(preds):
                 # 排名越高，得分越高（指数衰减）
                 score = weight * (0.5 ** i)
+                
+                # 如果是特殊关注生肖，增加得分
+                if zodiac in self.zodiac_attention:
+                    score *= (1 + self.error_learning_rate * self.zodiac_attention[zodiac])
+                
                 zodiac_scores[zodiac] += score
         
         # 按得分排序
