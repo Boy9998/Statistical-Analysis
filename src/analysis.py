@@ -9,6 +9,7 @@ from lunarcalendar import Converter, Solar, Lunar  # 精确农历计算
 from collections import defaultdict
 from src.strategy_manager import StrategyManager  # 导入增强的策略管理器
 import warnings
+import os
 
 # 兼容不同版本 Pandas 的 SettingWithCopyWarning
 try:
@@ -78,6 +79,9 @@ class LotteryAnalyzer:
             # 打印最新开奖信息
             latest = self.df.iloc[-1]
             print(f"最新开奖记录: 期号 {latest['expect']}, 日期 {latest['date'].date()}, 生肖 {latest['zodiac']}")
+            
+            # 创建错误分析目录
+            os.makedirs('error_analysis', exist_ok=True)
         else:
             print("警告：未获取到任何有效数据")
             self.strategy_manager = StrategyManager()
@@ -295,7 +299,7 @@ class LotteryAnalyzer:
         }
     
     def backtest_strategy(self):
-        """严格回测预测策略（使用固定窗口滑动） - 修复回测次数问题"""
+        """严格回测预测策略（使用固定窗口滑动） - 强化学习机制"""
         if self.df.empty:
             print("无法回测 - 数据为空")
             return pd.DataFrame(), 0.0
@@ -313,6 +317,7 @@ class LotteryAnalyzer:
         print(f"开始回测策略（固定窗口{window}期，共{test_count}次测试）...")
         
         results = []
+        error_patterns = defaultdict(lambda: defaultdict(int))  # 记录错误模式
         
         # 使用单个策略管理器处理整个回测过程
         strategy_manager = StrategyManager()
@@ -352,6 +357,24 @@ class LotteryAnalyzer:
                 '是否命中': is_hit
             })
             
+            # 记录错误模式
+            if not is_hit:
+                error_data = {
+                    'draw_number': test['expect'].values[0],
+                    'date': test['date'].dt.strftime('%Y-%m-%d').values[0],
+                    'actual_zodiac': actual,
+                    'predicted_zodiacs': ",".join(prediction),
+                    'last_zodiac': last_zodiac,
+                    'weekday': test['weekday'].values[0] if 'weekday' in test.columns else None,
+                    'month': test['month'].values[0] if 'month' in test.columns else None,
+                    'season': test['season'].values[0] if 'season' in test.columns else None,
+                    'festival': test['festival'].values[0] if 'festival' in test.columns else None
+                }
+                log_error(error_data)
+                
+                # 记录错误模式：上期生肖 -> 实际生肖
+                error_patterns[last_zodiac][actual] += 1
+            
             # 每50次迭代输出一次进度
             if len(results) % 50 == 0:
                 print(f"回测进度: {len(results)}/{test_count} ({len(results)/test_count*100:.1f}%)")
@@ -362,13 +385,75 @@ class LotteryAnalyzer:
             hit_count = result_df['是否命中'].sum()
             print(f"回测完成: 准确率={accuracy:.2%}, 命中次数={hit_count}/{len(result_df)}")
             
-            # 根据回测结果调整策略
-            self.strategy_manager.adjust(accuracy)
+            # 根据回测结果调整策略，并传入错误模式
+            self.strategy_manager.adjust(accuracy, error_patterns)
+            
+            # 保存错误模式分析
+            self.save_error_analysis(error_patterns)
         else:
             accuracy = 0.0
             print("回测完成: 无有效结果")
         
         return result_df, accuracy
+    
+    def save_error_analysis(self, error_patterns):
+        """保存错误模式分析结果"""
+        # 转换错误模式为DataFrame
+        error_list = []
+        for last_zodiac, patterns in error_patterns.items():
+            for actual, count in patterns.items():
+                error_list.append({
+                    '上期生肖': last_zodiac,
+                    '实际出现生肖': actual,
+                    '错误次数': count
+                })
+        
+        error_df = pd.DataFrame(error_list)
+        
+        if not error_df.empty:
+            # 按错误次数排序
+            error_df = error_df.sort_values('错误次数', ascending=False)
+            
+            # 保存到文件
+            error_file = f"error_analysis/error_patterns_{datetime.now().strftime('%Y%m%d')}.csv"
+            error_df.to_csv(error_file, index=False)
+            print(f"错误模式分析已保存到: {error_file}")
+            
+            # 提取最常见错误模式
+            common_errors = error_df.head(3).to_dict('records')
+            
+            # 根据常见错误模式调整预测策略
+            self.adjust_based_on_errors(common_errors)
+    
+    def adjust_based_on_errors(self, common_errors):
+        """根据常见错误模式调整预测策略"""
+        print("\n根据常见错误模式调整预测策略:")
+        for error in common_errors:
+            last_zodiac = error['上期生肖']
+            actual = error['实际出现生肖']
+            count = error['错误次数']
+            
+            print(f"常见错误模式: 上期是 {last_zodiac} 时, 实际出现 {actual} (发生{count}次)")
+            
+            # 1. 增加特定转移概率的权重
+            if f"{last_zodiac}-{actual}" in self.strategy_manager.combo_probs:
+                # 增加这个特定转移的权重
+                prob = self.strategy_manager.combo_probs[f"{last_zodiac}-{actual}"]
+                print(f"  - 增加转移概率权重: {last_zodiac} -> {actual} (概率={prob:.2%})")
+                
+                # 在策略管理器中标记这个模式需要更多关注
+                self.strategy_manager.special_attention_patterns[f"{last_zodiac}-{actual}"] = {
+                    'weight_multiplier': 1.5,  # 权重增加50%
+                    'last_occurrence': datetime.now(),
+                    'error_count': count
+                }
+            
+            # 2. 调整特定生肖的权重
+            print(f"  - 增加 {actual} 在类似情况下的预测优先级")
+            if actual in self.strategy_manager.zodiac_attention:
+                self.strategy_manager.zodiac_attention[actual] += count
+            else:
+                self.strategy_manager.zodiac_attention[actual] = count
     
     def add_features_to_data(self, df):
         """为数据添加必要的特征 - 完整实现"""
@@ -405,7 +490,7 @@ class LotteryAnalyzer:
                 df.loc[df['is_festival'], f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
     
     def apply_pattern_enhancement(self, prediction, last_zodiac, target_date, data):
-        """应用历史模式增强预测"""
+        """应用历史模式增强预测 - 集成错误学习"""
         festival = self.detect_festival(target_date)
         
         # 1. 节日效应增强
@@ -445,6 +530,28 @@ class LotteryAnalyzer:
                     prediction.remove(last_zodiac)
                     prediction.append(last_zodiac)
                     print(f"连续模式处理: {last_zodiac} 已连续出现 {current_consecutive}次 (历史最高 {max_consecutive}次), 降低优先级")
+        
+        # 4. 错误学习增强 - 新增
+        # 检查是否有针对当前上期生肖的特殊关注模式
+        special_pattern = f"{last_zodiac}-"
+        for pattern, info in self.strategy_manager.special_attention_patterns.items():
+            if pattern.startswith(special_pattern):
+                zodiac_to_boost = pattern.split('-')[1]
+                if zodiac_to_boost not in prediction:
+                    # 如果这个生肖不在预测中，替换掉得分最低的生肖
+                    prediction = prediction[:-1] + [zodiac_to_boost]
+                    print(f"错误学习增强: 根据历史错误模式，增加 {zodiac_to_boost} 的优先级")
+                    break
+        
+        # 5. 生肖关注度增强 - 新增
+        # 增加高关注度生肖的优先级
+        for zodiac in prediction.copy():
+            if zodiac in self.strategy_manager.zodiac_attention:
+                # 如果这个生肖有高关注度，提升优先级
+                if zodiac in prediction:
+                    prediction.remove(zodiac)
+                    prediction.insert(0, zodiac)
+                    print(f"关注度增强: {zodiac} 有高关注度，提升优先级")
         
         return prediction
     
