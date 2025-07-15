@@ -295,38 +295,38 @@ class LotteryAnalyzer:
         }
     
     def backtest_strategy(self):
-        """严格回测预测策略（使用固定窗口滑动） - 性能优化"""
+        """严格回测预测策略（使用固定窗口滑动） - 修复回测次数问题"""
         if self.df.empty:
             print("无法回测 - 数据为空")
             return pd.DataFrame(), 0.0
         
         window = BACKTEST_WINDOW
-        if len(self.df) < window + 1:
-            print(f"警告：数据不足{window+1}期，实际只有{len(self.df)}期")
+        total_records = len(self.df)
+        
+        # 确保有足够的数据进行回测
+        if total_records < window + 1:
+            print(f"警告：数据不足{window+1}期，实际只有{total_records}期")
             return pd.DataFrame(), 0.0
         
-        print(f"开始回测策略（固定窗口{window}期）...")
+        # 计算实际回测次数
+        test_count = total_records - window - 1
+        print(f"开始回测策略（固定窗口{window}期，共{test_count}次测试）...")
+        
         results = []
         
-        # 使用单个策略管理器处理整个回测过程 - 性能优化
+        # 使用单个策略管理器处理整个回测过程
         strategy_manager = StrategyManager()
         
         # 预先计算整个数据集的索引位置
-        indices = range(window, len(self.df)-1)
-        total = len(indices)
-        
-        for i, idx in enumerate(indices):
-            if (i+1) % 50 == 0:
-                print(f"回测进度: {i+1}/{total} ({((i+1)/total*100):.1f}%)")
-            
+        for i in range(window, total_records - 1):
             # 训练数据：从 i-window 到 i-1 (共window期)
-            train = self.df.iloc[idx-window:idx].copy()
+            train = self.df.iloc[i-window:i].copy()
             
-            # 为训练数据添加特征（关键修复）
+            # 为训练数据添加特征
             self.add_features_to_data(train)
             
             # 测试数据：下一期 (i)
-            test = self.df.iloc[idx:idx+1]
+            test = self.df.iloc[i:i+1]
             
             # 更新策略管理器的数据
             strategy_manager.update_combo_probs(train)
@@ -352,18 +352,9 @@ class LotteryAnalyzer:
                 '是否命中': is_hit
             })
             
-            # 记录预测错误
-            if not is_hit:
-                error_data = {
-                    'draw_number': test['expect'].values[0],
-                    'date': test['date'].dt.strftime('%Y-%m-%d').values[0],
-                    'actual_zodiac': actual,
-                    'predicted_zodiacs': ",".join(prediction),
-                    'last_zodiac': last_zodiac,
-                    'weekday': test['weekday'].values[0] if 'weekday' in test.columns else None,
-                    'month': test['month'].values[0] if 'month' in test.columns else None
-                }
-                log_error(error_data)
+            # 每50次迭代输出一次进度
+            if len(results) % 50 == 0:
+                print(f"回测进度: {len(results)}/{test_count} ({len(results)/test_count*100:.1f}%)")
         
         result_df = pd.DataFrame(results)
         if not result_df.empty:
@@ -526,7 +517,7 @@ class LotteryAnalyzer:
         }
     
     def generate_report(self):
-        """生成符合要求的分析报告"""
+        """生成符合要求的分析报告 - 修复回测描述"""
         if self.df.empty:
             report = "===== 彩票分析报告 =====\n错误：没有获取到有效数据，请检查API"
             print(report)
@@ -581,9 +572,9 @@ class LotteryAnalyzer:
         - 生肖: {last_zodiac}
         - 出现后下期最可能出现的4个生肖: {", ".join(transition_details.get(last_zodiac, ["无数据"]))}
         
-        回测结果（最近{BACKTEST_WINDOW}期）：
+        回测结果（使用{BACKTEST_WINDOW}期滚动窗口）：
         - 准确率：{accuracy:.2%}
-        - 命中次数：{int(accuracy * len(backtest_df)) if not backtest_df.empty else 0}/{len(backtest_df) if not backtest_df.empty else 0}
+        - 命中次数：{len(backtest_df) and int(accuracy * len(backtest_df)) or 0}/{len(backtest_df) if not backtest_df.empty else 0}
         
         下期预测：
         - 预测期号：{prediction['next_number']}
