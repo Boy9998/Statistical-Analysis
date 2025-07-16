@@ -126,23 +126,24 @@ class LotteryAnalyzer:
         print(f"已添加生肖特征: {len(self.zodiacs)*3}个新特征")
     
     def add_rolling_features(self):
-        """添加滚动窗口特征 - 关键修复"""
+        """添加滚动窗口特征 - 关键修复（使用期数窗口替代自然日窗口）"""
         print("添加滚动窗口特征...")
-        windows = [7, 30]  # 7天和30天窗口
+        # 使用期数窗口替代自然日窗口
+        periods = [7, 30]  # 7期和30期窗口
         
         # 创建生肖出现标志
         for zodiac in self.zodiacs:
             self.df[f'occur_{zodiac}'] = (self.df['zodiac'] == zodiac).astype(int)
         
-        for window in windows:
+        for period in periods:
             # 为每个生肖添加滚动窗口特征
             for zodiac in self.zodiacs:
-                # 计算滚动频率 - 使用expanding min_periods确保有足够数据
-                self.df[f'rolling_{window}d_{zodiac}'] = (
-                    self.df[f'occur_{zodiac}'].rolling(window=window, min_periods=1).mean()
+                # 计算滚动频率 - 使用期数窗口
+                self.df[f'rolling_{period}p_{zodiac}'] = (
+                    self.df[f'occur_{zodiac}'].rolling(window=period, min_periods=1).mean()
                 )
         
-        print(f"已添加滚动窗口特征: {len(windows)*len(self.zodiacs)}个新特征")
+        print(f"已添加滚动窗口特征: {len(periods)*len(self.zodiacs)}个新特征（使用期数窗口）")
     
     def get_lunar_date(self, dt):
         """精确转换公历到农历 - 增强健壮性"""
