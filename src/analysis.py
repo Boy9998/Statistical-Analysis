@@ -10,6 +10,8 @@ from collections import defaultdict
 from src.strategy_manager import StrategyManager  # 导入增强的策略管理器
 import warnings
 import os
+from sklearn.model_selection import TimeSeriesSplit
+from scipy.stats import variation
 
 # 兼容不同版本 Pandas 的 SettingWithCopyWarning
 try:
@@ -210,11 +212,12 @@ class LotteryAnalyzer:
             return "冬"
     
     def detect_patterns(self):
-        """检测历史模式（连续出现、间隔模式、节日效应）"""
+        """检测历史模式（连续出现、间隔模式、节日效应） - 增强量化处理"""
         patterns = {
             'consecutive': defaultdict(int),
             'intervals': defaultdict(list),
-            'festival_boost': defaultdict(lambda: defaultdict(int))
+            'festival_boost': defaultdict(lambda: defaultdict(int)),
+            'festival_strength': defaultdict(float)  # 新增：节日效应强度
         }
         
         # 1. 连续出现模式
@@ -242,22 +245,37 @@ class LotteryAnalyzer:
                 patterns['intervals'][zodiac].append(interval)
             last_occurrence[zodiac] = idx
         
-        # 计算平均间隔
+        # 计算平均间隔和标准差
         for zodiac, intervals in patterns['intervals'].items():
             if intervals:
-                patterns['intervals'][zodiac] = sum(intervals) / len(intervals)
+                patterns['intervals'][zodiac] = {
+                    'mean': sum(intervals) / len(intervals),
+                    'std': np.std(intervals) if len(intervals) > 1 else 0
+                }
         
-        # 3. 节日效应模式
+        # 3. 节日效应模式 - 量化处理
         festival_zodiacs = defaultdict(lambda: defaultdict(int))
+        total_festivals = 0
+        
         for idx, row in self.df.iterrows():
             if row['is_festival']:
-                festival_zodiacs[row['festival']][row['zodiac']] += 1
+                festival = row['festival']
+                festival_zodiacs[festival][row['zodiac']] += 1
+                total_festivals += 1
         
-        # 找出每个节日出现频率最高的生肖
+        # 计算每个节日的生肖频率和效应强度
         for festival, zodiac_counts in festival_zodiacs.items():
             if zodiac_counts:
+                total = sum(zodiac_counts.values())
+                # 找出主要生肖
                 most_common = max(zodiac_counts.items(), key=lambda x: x[1])
                 patterns['festival_boost'][festival] = most_common[0]
+                
+                # 计算效应强度：主要生肖占比
+                strength = most_common[1] / total
+                patterns['festival_strength'][festival] = strength
+                
+                print(f"节日效应量化: {festival} -> {most_common[0]} (强度={strength:.2%})")
         
         print(f"检测到模式: {len(patterns['consecutive'])}个连续模式, {len(patterns['intervals'])}个间隔模式, {len(patterns['festival_boost'])}个节日效应")
         return patterns
@@ -300,22 +318,46 @@ class LotteryAnalyzer:
         }
     
     def backtest_strategy(self):
-        """严格回测预测策略（使用固定窗口滑动） - 强化学习机制"""
+        """动态回测预测策略（自适应窗口+交叉验证）"""
         if self.df.empty:
             print("无法回测 - 数据为空")
             return pd.DataFrame(), 0.0
         
-        window = BACKTEST_WINDOW
+        # 最小和最大窗口设置
+        min_window = 100
+        max_window = 300
+        default_window = BACKTEST_WINDOW
+        
         total_records = len(self.df)
         
         # 确保有足够的数据进行回测
-        if total_records < window + 1:
-            print(f"警告：数据不足{window+1}期，实际只有{total_records}期")
+        if total_records < min_window + 1:
+            print(f"警告：数据不足{min_window+1}期，实际只有{total_records}期")
             return pd.DataFrame(), 0.0
+        
+        # 计算数据波动性（用于动态调整窗口）
+        volatility = self._calculate_data_volatility()
+        print(f"数据波动性: {volatility:.4f}")
+        
+        # 根据波动性动态调整窗口大小
+        # 波动性高 -> 使用小窗口快速适应变化
+        # 波动性低 -> 使用大窗口利用更多历史数据
+        if volatility > 0.6:  # 高波动性
+            window = min_window
+        elif volatility > 0.4:  # 中波动性
+            window = min_window + int((max_window - min_window) * 0.3)
+        else:  # 低波动性
+            window = max_window
+        
+        print(f"自适应窗口大小: {window}期 (基于波动性 {volatility:.2%})")
         
         # 计算实际回测次数
         test_count = total_records - window - 1
-        print(f"开始回测策略（固定窗口{window}期，共{test_count}次测试）...")
+        if test_count <= 0:
+            print(f"警告：窗口大小{window}过大，实际只有{total_records}期数据")
+            return pd.DataFrame(), 0.0
+        
+        print(f"开始回测策略（自适应窗口{window}期，共{test_count}次测试）...")
         
         results = []
         error_patterns = defaultdict(lambda: defaultdict(int))  # 记录错误模式
@@ -323,7 +365,49 @@ class LotteryAnalyzer:
         # 使用单个策略管理器处理整个回测过程
         strategy_manager = StrategyManager()
         
-        # 预先计算整个数据集的索引位置
+        # 添加交叉验证
+        n_splits = 5
+        if test_count >= n_splits * 10:  # 确保有足够数据
+            print(f"启用 {n_splits}-折交叉验证")
+            tscv = TimeSeriesSplit(n_splits=n_splits)
+            split_results = []
+            
+            # 进行时间序列交叉验证
+            for train_index, test_index in tscv.split(self.df):
+                if len(train_index) < min_window or len(test_index) == 0:
+                    continue
+                
+                # 使用训练数据更新策略
+                train = self.df.iloc[train_index].copy()
+                self.add_features_to_data(train)
+                strategy_manager.update_combo_probs(train)
+                strategy_manager.evaluate_factor_validity(train)
+                
+                # 测试数据
+                test = self.df.iloc[test_index]
+                
+                # 获取特征数据
+                feature_row = train.iloc[-1]
+                last_zodiac = feature_row['zodiac']
+                
+                # 预测
+                prediction, _ = strategy_manager.generate_prediction(
+                    feature_row, last_zodiac
+                )
+                actual = test['zodiac'].values[0]
+                
+                # 记录结果
+                is_hit = 1 if actual in prediction else 0
+                split_results.append(is_hit)
+            
+            # 计算交叉验证准确率
+            cv_accuracy = np.mean(split_results) if split_results else 0.0
+            print(f"交叉验证准确率: {cv_accuracy:.2%} ({len(split_results)}次测试)")
+        else:
+            cv_accuracy = 0.0
+            print(f"数据不足{min_window*5}期，跳过交叉验证")
+        
+        # 主回测循环（使用自适应窗口）
         for i in range(window, total_records - 1):
             # 训练数据：从 i-window 到 i-1 (共window期)
             train = self.df.iloc[i-window:i].copy()
@@ -386,16 +470,45 @@ class LotteryAnalyzer:
             hit_count = result_df['是否命中'].sum()
             print(f"回测完成: 准确率={accuracy:.2%}, 命中次数={hit_count}/{len(result_df)}")
             
+            # 综合交叉验证结果
+            if cv_accuracy > 0:
+                combined_accuracy = (accuracy + cv_accuracy) / 2
+                print(f"综合准确率 (主回测+交叉验证): {combined_accuracy:.2%}")
+            else:
+                combined_accuracy = accuracy
+            
             # 根据回测结果调整策略，并传入错误模式
-            self.strategy_manager.adjust(accuracy, error_patterns)
+            self.strategy_manager.adjust(combined_accuracy, error_patterns)
             
             # 保存错误模式分析
             self.save_error_analysis(error_patterns)
         else:
-            accuracy = 0.0
+            combined_accuracy = 0.0
             print("回测完成: 无有效结果")
         
-        return result_df, accuracy
+        return result_df, combined_accuracy
+    
+    def _calculate_data_volatility(self):
+        """计算数据波动性（基于最近200期生肖频率变化）"""
+        if len(self.df) < 200:
+            # 数据不足时使用全部数据
+            recent = self.df
+        else:
+            recent = self.df.tail(200)
+        
+        # 计算每个生肖的出现频率变化
+        zodiac_volatilities = []
+        for zodiac in self.zodiacs:
+            # 获取该生肖的出现序列
+            occurrences = (recent['zodiac'] == zodiac).astype(int).values
+            
+            # 计算变异系数（标准差/均值）
+            if np.mean(occurrences) > 0:
+                cv = variation(occurrences) if len(occurrences) > 1 else 0
+                zodiac_volatilities.append(cv)
+        
+        # 返回平均波动性
+        return np.mean(zodiac_volatilities) if zodiac_volatilities else 0.0
     
     def save_error_analysis(self, error_patterns):
         """保存错误模式分析结果"""
@@ -491,32 +604,72 @@ class LotteryAnalyzer:
                 df.loc[df['is_festival'], f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
     
     def apply_pattern_enhancement(self, prediction, last_zodiac, target_date, data):
-        """应用历史模式增强预测 - 集成错误学习"""
+        """应用历史模式增强预测 - 强化节日效应和连续/间隔处理"""
         festival = self.detect_festival(target_date)
         
-        # 1. 节日效应增强
+        # 1. 节日效应增强 - 量化处理
         if festival in self.patterns['festival_boost']:
             boost_zodiac = self.patterns['festival_boost'][festival]
+            strength = self.patterns['festival_strength'].get(festival, 0.5)  # 默认强度50%
+            
             if boost_zodiac not in prediction:
-                # 如果节日生肖不在预测中，替换掉得分最低的生肖
-                prediction = prediction[:-1] + [boost_zodiac]
-                print(f"节日效应增强: {festival}节日常见生肖 {boost_zodiac} 加入预测")
+                # 根据节日效应强度决定替换位置
+                if strength > 0.7:  # 强效应（70%以上）
+                    # 替换预测中的最后一位
+                    prediction = prediction[:-1] + [boost_zodiac]
+                    print(f"节日效应增强(强): {festival}节日常见生肖 {boost_zodiac} 加入预测 (强度={strength:.2%})")
+                elif strength > 0.5:  # 中等效应（50-70%）
+                    # 替换预测中的最后一位，并提升到中间位置
+                    prediction = prediction[:-1] + [boost_zodiac]
+                    prediction.insert(len(prediction)//2, prediction.pop())
+                    print(f"节日效应增强(中): {festival}节日常见生肖 {boost_zodiac} 加入预测 (强度={strength:.2%})")
+                else:  # 弱效应（50%以下）
+                    # 替换预测中的最后一位
+                    prediction = prediction[:-1] + [boost_zodiac]
+                    print(f"节日效应增强(弱): {festival}节日常见生肖 {boost_zodiac} 加入预测 (强度={strength:.2%})")
+            else:
+                # 如果已在预测中，提升其优先级
+                current_index = prediction.index(boost_zodiac)
+                if current_index > 0:
+                    # 根据强度决定提升幅度
+                    if strength > 0.7:
+                        prediction.insert(0, prediction.pop(current_index))
+                        print(f"节日效应提升(强): {boost_zodiac} 提升至首位 (强度={strength:.2%})")
+                    elif strength > 0.5:
+                        new_index = max(0, current_index - 1)
+                        prediction.insert(new_index, prediction.pop(current_index))
+                        print(f"节日效应提升(中): {boost_zodiac} 提升一位 (强度={strength:.2%})")
         
-        # 2. 间隔模式增强
-        for zodiac in prediction.copy():  # 使用副本避免修改迭代中的列表
+        # 2. 间隔模式增强 - 严格干预
+        for zodiac in self.zodiacs:
             if zodiac in self.patterns['intervals']:
-                avg_interval = self.patterns['intervals'][zodiac]
+                interval_data = self.patterns['intervals'][zodiac]
+                avg_interval = interval_data['mean']
+                std_dev = interval_data['std']
+                
                 last_idx = data[data['zodiac'] == zodiac].index[-1] if not data.empty else -1
                 current_interval = len(data) - last_idx
                 
-                # 如果接近平均间隔，提升优先级
-                if current_interval >= avg_interval * 0.9:
-                    if zodiac in prediction:
+                # 计算与平均间隔的偏差（标准差单位）
+                if std_dev > 0:
+                    z_score = (current_interval - avg_interval) / std_dev
+                else:
+                    z_score = 0
+                
+                # 如果接近或超过平均间隔（考虑标准差）
+                if z_score >= -0.5:  # 在平均间隔的0.5个标准差范围内
+                    # 强制加入或提升优先级
+                    if zodiac not in prediction:
+                        # 替换最后一位
+                        prediction = prediction[:-1] + [zodiac]
+                        print(f"间隔模式强制加入: {zodiac} 已间隔 {current_interval}期 (平均 {avg_interval:.1f}±{std_dev:.1f}期)")
+                    else:
+                        # 提升到首位
                         prediction.remove(zodiac)
                         prediction.insert(0, zodiac)
-                    print(f"间隔模式增强: {zodiac} 已间隔 {current_interval}期 (平均 {avg_interval:.1f}期), 提升优先级")
+                        print(f"间隔模式提升首位: {zodiac} 已间隔 {current_interval}期 (平均 {avg_interval:.1f}±{std_dev:.1f}期)")
         
-        # 3. 连续出现模式处理
+        # 3. 连续出现模式处理 - 严格干预
         if last_zodiac in self.patterns['consecutive']:
             max_consecutive = self.patterns['consecutive'][last_zodiac]
             current_consecutive = 1
@@ -525,14 +678,13 @@ class LotteryAnalyzer:
                 current_consecutive += 1
                 idx -= 1
             
-            # 如果连续出现次数接近历史最大值，降低该生肖优先级
-            if current_consecutive >= max_consecutive * 0.8:
+            # 如果连续出现次数接近历史最大值，强制移出预测
+            if current_consecutive >= max(2, max_consecutive * 0.8):
                 if last_zodiac in prediction:
                     prediction.remove(last_zodiac)
-                    prediction.append(last_zodiac)
-                    print(f"连续模式处理: {last_zodiac} 已连续出现 {current_consecutive}次 (历史最高 {max_consecutive}次), 降低优先级")
+                    print(f"连续模式强制移出: {last_zodiac} 已连续出现 {current_consecutive}次 (历史最高 {max_consecutive}次)")
         
-        # 4. 错误学习增强 - 新增
+        # 4. 错误学习增强
         # 检查是否有针对当前上期生肖的特殊关注模式
         special_pattern = f"{last_zodiac}-"
         for pattern, info in self.strategy_manager.special_attention_patterns.items():
@@ -544,14 +696,15 @@ class LotteryAnalyzer:
                     print(f"错误学习增强: 根据历史错误模式，增加 {zodiac_to_boost} 的优先级")
                     break
         
-        # 5. 生肖关注度增强 - 新增
+        # 5. 生肖关注度增强
         # 增加高关注度生肖的优先级
         for zodiac in prediction.copy():
             if zodiac in self.strategy_manager.zodiac_attention:
                 # 如果这个生肖有高关注度，提升优先级
                 if zodiac in prediction:
-                    prediction.remove(zodiac)
-                    prediction.insert(0, zodiac)
+                    current_index = prediction.index(zodiac)
+                    new_index = max(0, current_index - 1)
+                    prediction.insert(new_index, prediction.pop(current_index))
                     print(f"关注度增强: {zodiac} 有高关注度，提升优先级")
         
         return prediction
@@ -625,7 +778,7 @@ class LotteryAnalyzer:
         }
     
     def generate_report(self):
-        """生成符合要求的分析报告 - 修复回测描述"""
+        """生成符合要求的分析报告 - 包含动态回测信息"""
         if self.df.empty:
             report = "===== 彩票分析报告 =====\n错误：没有获取到有效数据，请检查API"
             print(report)
@@ -671,7 +824,7 @@ class LotteryAnalyzer:
         
         历史模式：
         - 最长连续出现: {', '.join([f'{z}({c})' for z, c in self.patterns.get('consecutive', {}).items()])}
-        - 节日效应: {', '.join([f'{f}→{z}' for f, z in self.patterns.get('festival_boost', {}).items()])}
+        - 节日效应: {', '.join([f'{f}→{z}(强度:{self.patterns["festival_strength"].get(f,0):.1%})' for f, z in self.patterns.get('festival_boost', {}).items()])}
         
         生肖频率分析（全部历史数据）：
         {analysis.get('frequency', pd.DataFrame()).to_string(index=False) if 'frequency' in analysis else "无数据"}
@@ -680,7 +833,7 @@ class LotteryAnalyzer:
         - 生肖: {last_zodiac}
         - 出现后下期最可能出现的4个生肖: {", ".join(transition_details.get(last_zodiac, ["无数据"]))}
         
-        回测结果（使用{BACKTEST_WINDOW}期滚动窗口）：
+        回测结果（自适应窗口）：
         - 准确率：{accuracy:.2%}
         - 命中次数：{len(backtest_df) and int(accuracy * len(backtest_df)) or 0}/{len(backtest_df) if not backtest_df.empty else 0}
         
