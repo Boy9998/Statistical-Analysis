@@ -27,8 +27,8 @@ class StrategyManager:
             'transition': 0.15,    # 转移概率
             'season': 0.10,        # 季节
             'festival': 0.10,      # 节日
-            'rolling_7d': 0.15,    # 7天滚动特征
-            'rolling_30d': 0.10,   # 30天滚动特征
+            'rolling_7p': 0.15,    # 7期滚动特征（更新名称）
+            'rolling_30p': 0.10,   # 30期滚动特征（更新名称）
             'combo': 0.15,         # 生肖组合概率
             'feature_imp': 0.10    # 特征重要性
         }
@@ -43,7 +43,7 @@ class StrategyManager:
         print(f"初始化策略管理器: 权重={self.weights} | 强化学习已启用")
     
     def adjust(self, accuracy, error_patterns=None):
-        """根据准确率和错误模式动态调整权重 - 强化学习机制"""
+        """根据准确率和错误模式动态调整权重 - 增强敏感度并关联错误频率"""
         self.accuracy_history.append(accuracy)
         
         # 计算近期准确率趋势 (最近10次)
@@ -51,66 +51,104 @@ class StrategyManager:
         
         # 根据趋势和错误模式调整权重
         adjustment_made = False
+        total_errors = 0
         
-        # 1. 基于错误模式调整
+        # 1. 基于错误模式调整 - 增强敏感度
         if error_patterns:
             for last_zodiac, patterns in error_patterns.items():
                 for actual, count in patterns.items():
+                    total_errors += count
                     pattern_key = f"{last_zodiac}-{actual}"
                     
                     # 增加错误模式中实际出现生肖的权重
                     if actual in self.zodiacs:
-                        # 增加权重，增加量与错误次数成正比
-                        adjustment = min(0.05, count * 0.005)
+                        # 增强调整幅度：与错误频率直接关联
+                        adjustment = min(0.1, count * 0.015)  # 每15次错误增加0.1权重
                         if f'freq_{actual}' in self.weights:
-                            self.weights[f'freq_{actual}'] = min(0.25, self.weights.get(f'freq_{actual}', 0) + adjustment)
+                            self.weights[f'freq_{actual}'] = min(0.30, self.weights.get(f'freq_{actual}', 0) + adjustment)
                         adjustment_made = True
-                        print(f"错误学习调整: {last_zodiac}->{actual} 模式, 增加 {actual} 权重 +{adjustment:.3f}")
+                        print(f"错误学习调整: {last_zodiac}->{actual} 模式, 增加 {actual} 权重 +{adjustment:.3f} (基于{count}次错误)")
                         
                         # 记录特殊关注模式
                         self.special_attention_patterns[pattern_key] = {
-                            'weight_multiplier': 1.5,
+                            'weight_multiplier': 1.5 + (count * 0.05),  # 错误次数越多，权重倍数越高
                             'last_occurrence': datetime.now(),
                             'error_count': count
                         }
         
-        # 2. 基于准确率趋势调整
-        if not adjustment_made:
-            if trend < 0.35:
-                # 准确率低时增加组合概率和特征重要性权重
-                self.weights['combo'] = min(0.25, self.weights['combo'] + 0.08)
-                self.weights['feature_imp'] = min(0.25, self.weights['feature_imp'] + 0.08)
-                # 降低其他权重
-                for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7d', 'rolling_30d']:
-                    self.weights[factor] = max(0.05, self.weights[factor] - 0.02)
-                print("趋势调整: 准确率低，增加组合和特征重要性权重")
-            elif trend > 0.45:
-                # 准确率高时增加滚动窗口权重
-                self.weights['rolling_7d'] = min(0.25, self.weights['rolling_7d'] + 0.05)
-                self.weights['rolling_30d'] = min(0.25, self.weights['rolling_30d'] + 0.04)
-                # 降低其他权重
-                for factor in ['frequency', 'transition', 'season', 'festival', 'combo', 'feature_imp']:
-                    self.weights[factor] = max(0.05, self.weights[factor] - 0.01)
-                print("趋势调整: 准确率高，增加滚动窗口权重")
+        # 2. 基于准确率动态调整 - 大幅提升敏感度
+        # 当准确率低于60%时，大幅增加组合概率和特征重要性权重
+        if accuracy < 0.60:
+            # 计算调整幅度：与准确率偏差成比例
+            accuracy_deficit = 0.60 - accuracy
+            adjustment_factor = min(0.3, 0.15 + (accuracy_deficit * 1.5))
+            
+            # 大幅增加组合概率权重
+            self.weights['combo'] = min(0.30, self.weights['combo'] + adjustment_factor)
+            
+            # 大幅增加特征重要性权重
+            self.weights['feature_imp'] = min(0.30, self.weights['feature_imp'] + adjustment_factor)
+            
+            # 降低其他权重
+            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7p', 'rolling_30p']:
+                self.weights[factor] = max(0.05, self.weights[factor] - (adjustment_factor * 0.5))
+            
+            print(f"准确率调整: 准确率低 ({accuracy:.2%})，大幅增加组合(+{adjustment_factor:.3f})和特征重要性权重")
+            adjustment_made = True
+        # 当准确率较高时，增加滚动窗口权重
+        elif accuracy > 0.65:
+            # 计算调整幅度：与准确率超值成比例
+            accuracy_surplus = accuracy - 0.65
+            adjustment_factor = min(0.2, 0.10 + (accuracy_surplus * 1.0))
+            
+            # 增加滚动窗口权重
+            self.weights['rolling_7p'] = min(0.30, self.weights['rolling_7p'] + adjustment_factor)
+            self.weights['rolling_30p'] = min(0.25, self.weights['rolling_30p'] + adjustment_factor)
+            
+            # 降低其他权重
+            for factor in ['frequency', 'transition', 'season', 'festival', 'combo', 'feature_imp']:
+                self.weights[factor] = max(0.05, self.weights[factor] - (adjustment_factor * 0.3))
+            
+            print(f"准确率调整: 准确率高 ({accuracy:.2%})，增加滚动窗口权重(+{adjustment_factor:.3f})")
+            adjustment_made = True
         
         # 3. 根据因子有效性调整权重
         if self.factor_validity:
             total_validity = sum(self.factor_validity.values())
             for factor, validity in self.factor_validity.items():
                 if factor in self.weights:
-                    # 有效性评分占调整权重的70%
-                    validity_weight = 0.7 * (validity / total_validity)
-                    # 当前权重占30%
-                    current_weight = 0.3 * self.weights[factor]
+                    # 增强有效性对权重的影响
+                    validity_weight = 0.85 * (validity / total_validity)  # 有效性占比提高到85%
+                    # 当前权重占15%
+                    current_weight = 0.15 * self.weights[factor]
                     self.weights[factor] = validity_weight + current_weight
             print("因子有效性调整: 基于因子表现更新权重")
+            adjustment_made = True
+        
+        # 4. 当连续3次准确率低于55%时，触发紧急优化
+        if len(self.accuracy_history) >= 3 and all(acc < 0.55 for acc in self.accuracy_history[-3:]):
+            emergency_adjust = 0.20  # 紧急调整幅度
+            
+            # 大幅增加组合概率权重
+            self.weights['combo'] = min(0.35, self.weights['combo'] + emergency_adjust)
+            
+            # 大幅增加特征重要性权重
+            self.weights['feature_imp'] = min(0.35, self.weights['feature_imp'] + emergency_adjust)
+            
+            # 重置其他权重
+            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7p', 'rolling_30p']:
+                self.weights[factor] = max(0.05, self.weights[factor] * 0.7)  # 降低30%
+            
+            print(f"紧急优化: 连续3次准确率<55%，大幅增加组合(+{emergency_adjust:.3f})和特征重要性权重")
+            adjustment_made = True
         
         # 归一化权重
-        total = sum(self.weights.values())
-        for key in self.weights:
-            self.weights[key] = round(self.weights[key] / total, 2)
+        if adjustment_made:
+            total = sum(self.weights.values())
+            for key in self.weights:
+                self.weights[key] = round(self.weights[key] / total, 3)  # 保留3位小数提高精度
+            print(f"调整后权重: {self.weights}")
         
-        print(f"调整后权重: {self.weights}")
         return self.weights
     
     def update_factor_performance(self, factor_accuracy):
@@ -153,10 +191,10 @@ class StrategyManager:
             print("警告: 数据中缺少'is_festival'列，跳过节日因子验证")
             factor_scores['festival'] = 0.0
         
-        # 5. 滚动窗口因子验证
+        # 5. 滚动窗口因子验证 - 更新为7期和30期
         rolling_acc = self._validate_rolling_factor(recent)
-        factor_scores['rolling_7d'] = rolling_acc.get('rolling_7d', 0)
-        factor_scores['rolling_30d'] = rolling_acc.get('rolling_30d', 0)
+        factor_scores['rolling_7p'] = rolling_acc.get('rolling_7p', 0)
+        factor_scores['rolling_30p'] = rolling_acc.get('rolling_30p', 0)
         
         # 6. 组合概率因子验证
         combo_acc = self._validate_combo_factor(recent)
@@ -263,31 +301,35 @@ class StrategyManager:
         return accuracy_score(actuals, predictions) if predictions else 0
     
     def _validate_rolling_factor(self, df):
-        """验证滚动窗口因子有效性"""
-        predictions_7d = []
-        predictions_30d = []
+        """验证滚动窗口因子有效性 - 更新为7期和30期"""
+        predictions_7p = []
+        predictions_30p = []
         actuals = []
         
+        # 至少需要30期数据
+        if len(df) < 30:
+            return {'rolling_7p': 0, 'rolling_30p': 0}
+        
         for i in range(30, len(df)):
-            # 7天滚动窗口
-            rolling_7d = df.iloc[i-7:i]
-            freq_7d = rolling_7d['zodiac'].value_counts(normalize=True)
-            pred_7d = freq_7d.idxmax() if not freq_7d.empty else None
+            # 7期滚动窗口
+            rolling_7p = df.iloc[i-7:i]
+            freq_7p = rolling_7p['zodiac'].value_counts(normalize=True)
+            pred_7p = freq_7p.idxmax() if not freq_7p.empty else None
             
-            # 30天滚动窗口
-            rolling_30d = df.iloc[i-30:i]
-            freq_30d = rolling_30d['zodiac'].value_counts(normalize=True)
-            pred_30d = freq_30d.idxmax() if not freq_30d.empty else None
+            # 30期滚动窗口
+            rolling_30p = df.iloc[i-30:i]
+            freq_30p = rolling_30p['zodiac'].value_counts(normalize=True)
+            pred_30p = freq_30p.idxmax() if not freq_30p.empty else None
             
-            if pred_7d and pred_30d:
-                predictions_7d.append(pred_7d)
-                predictions_30d.append(pred_30d)
+            if pred_7p and pred_30p:
+                predictions_7p.append(pred_7p)
+                predictions_30p.append(pred_30p)
                 actuals.append(df['zodiac'].iloc[i])
         
-        acc_7d = accuracy_score(actuals, predictions_7d) if predictions_7d else 0
-        acc_30d = accuracy_score(actuals, predictions_30d) if predictions_30d else 0
+        acc_7p = accuracy_score(actuals, predictions_7p) if predictions_7p else 0
+        acc_30p = accuracy_score(actuals, predictions_30p) if predictions_30p else 0
         
-        return {'rolling_7d': acc_7d, 'rolling_30d': acc_30d}
+        return {'rolling_7p': acc_7p, 'rolling_30p': acc_30p}
     
     def _validate_combo_factor(self, df):
         """验证组合概率因子有效性"""
@@ -360,8 +402,8 @@ class StrategyManager:
             'trans_': 'transition',
             'season_': 'season',
             'festival_': 'festival',
-            'rolling_7d_': 'rolling_7d',
-            'rolling_30d_': 'rolling_30d',
+            'rolling_7p_': 'rolling_7p',  # 更新为7期
+            'rolling_30p_': 'rolling_30p', # 更新为30期
             'combo_': 'combo'
         }
         
@@ -382,8 +424,8 @@ class StrategyManager:
             # 更新权重
             for factor, imp in factor_imp.items():
                 if factor in self.weights:
-                    # 特征重要性占权重调整的70%
-                    self.weights[factor] = 0.7 * imp + 0.3 * self.weights[factor]
+                    # 特征重要性占权重调整的80%
+                    self.weights[factor] = 0.8 * imp + 0.2 * self.weights[factor]
         
         print(f"基于特征重要性更新权重: {self.weights}")
     
@@ -434,7 +476,7 @@ class StrategyManager:
         # 当前权重
         report += "\n当前权重分配:\n"
         for factor, weight in self.weights.items():
-            report += f"- {factor}: {weight:.2f}\n"
+            report += f"- {factor}: {weight:.3f}\n"
         
         # 因子历史表现
         report += "\n历史准确率 (最近5次平均):\n"
@@ -468,7 +510,7 @@ class StrategyManager:
             sorted_patterns = sorted(self.special_attention_patterns.items(), 
                                    key=lambda x: x[1]['error_count'], reverse=True)
             for pattern, info in sorted_patterns[:3]:
-                report += f"- {pattern}: 错误次数={info['error_count']}, 权重倍数={info['weight_multiplier']}\n"
+                report += f"- {pattern}: 错误次数={info['error_count']}, 权重倍数={info['weight_multiplier']:.2f}\n"
         
         return report
     
@@ -486,7 +528,7 @@ class StrategyManager:
         # 4. 节日因子预测
         festival_pred = self._festival_prediction(features)
         
-        # 5. 滚动窗口预测
+        # 5. 滚动窗口预测 - 更新为7期和30期
         rolling_pred = self._rolling_prediction(features)
         
         # 6. 组合概率预测
@@ -501,8 +543,8 @@ class StrategyManager:
             'transition': trans_pred,
             'season': season_pred,
             'festival': festival_pred,
-            'rolling_7d': rolling_pred.get('7d', []),
-            'rolling_30d': rolling_pred.get('30d', []),
+            'rolling_7p': rolling_pred.get('7p', []),  # 更新为7期
+            'rolling_30p': rolling_pred.get('30p', []), # 更新为30期
             'combo': combo_pred,
             'feature_imp': imp_pred
         }
@@ -571,38 +613,38 @@ class StrategyManager:
         return [z for z, _ in sorted_zodiac[:2]]
     
     def _rolling_prediction(self, features):
-        """基于滚动窗口的预测"""
-        # 7天滚动窗口
-        rolling_7d = {}
+        """基于滚动窗口的预测 - 更新为7期和30期"""
+        # 7期滚动窗口
+        rolling_7p = {}
         for z in self.zodiacs:
-            feature_name = f'rolling_7d_{z}'
+            feature_name = f'rolling_7p_{z}'  # 更新为7期
             if feature_name in features:
                 # 确保值是标量而非Series
                 value = features[feature_name]
                 if isinstance(value, pd.Series):
                     # 取最后一个值
                     value = value.iloc[-1] if not value.empty else 0
-                rolling_7d[z] = value
+                rolling_7p[z] = value
         
-        sorted_7d = sorted(rolling_7d.items(), key=lambda x: x[1], reverse=True)
-        pred_7d = [z for z, _ in sorted_7d[:2]] if sorted_7d else []
+        sorted_7p = sorted(rolling_7p.items(), key=lambda x: x[1], reverse=True)
+        pred_7p = [z for z, _ in sorted_7p[:2]] if sorted_7p else []
         
-        # 30天滚动窗口
-        rolling_30d = {}
+        # 30期滚动窗口
+        rolling_30p = {}
         for z in self.zodiacs:
-            feature_name = f'rolling_30d_{z}'
+            feature_name = f'rolling_30p_{z}'  # 更新为30期
             if feature_name in features:
                 # 确保值是标量而非Series
                 value = features[feature_name]
                 if isinstance(value, pd.Series):
                     # 取最后一个值
                     value = value.iloc[-1] if not value.empty else 0
-                rolling_30d[z] = value
+                rolling_30p[z] = value
         
-        sorted_30d = sorted(rolling_30d.items(), key=lambda x: x[1], reverse=True)
-        pred_30d = [z for z, _ in sorted_30d[:2]] if sorted_30d else []
+        sorted_30p = sorted(rolling_30p.items(), key=lambda x: x[1], reverse=True)
+        pred_30p = [z for z, _ in sorted_30p[:2]] if sorted_30p else []
         
-        return {'7d': pred_7d, '30d': pred_30d}
+        return {'7p': pred_7p, '30p': pred_30p}  # 更新键名
     
     def _importance_weighted_prediction(self, features):
         """基于特征重要性的预测"""
