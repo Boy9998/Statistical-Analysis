@@ -21,16 +21,17 @@ os.makedirs('error_analysis', exist_ok=True)
 
 class StrategyManager:
     def __init__(self):
-        # 扩展权重维度
+        # 扩展权重维度，增加ML模型权重
         self.weights = {
-            'frequency': 0.15,     # 基础频率
-            'transition': 0.15,    # 转移概率
-            'season': 0.10,        # 季节
-            'festival': 0.10,      # 节日
-            'rolling_7p': 0.15,    # 7期滚动特征（更新名称）
-            'rolling_30p': 0.10,   # 30期滚动特征（更新名称）
-            'combo': 0.15,         # 生肖组合概率
-            'feature_imp': 0.10    # 特征重要性
+            'frequency': 0.12,     # 基础频率 (原0.15)
+            'transition': 0.12,    # 转移概率 (原0.15)
+            'season': 0.08,        # 季节 (原0.10)
+            'festival': 0.08,      # 节日 (原0.10)
+            'rolling_7p': 0.12,    # 7期滚动特征 (原0.15)
+            'rolling_30p': 0.08,   # 30期滚动特征 (原0.10)
+            'combo': 0.12,         # 生肖组合概率 (原0.15)
+            'feature_imp': 0.08,   # 特征重要性 (原0.10)
+            'ml_model': 0.20      # 新增ML模型权重
         }
         self.accuracy_history = []
         self.factor_performance = defaultdict(list)  # 记录每个因子独立表现的历史准确率
@@ -40,7 +41,18 @@ class StrategyManager:
         self.special_attention_patterns = {}  # 需要特别关注的转移模式
         self.zodiac_attention = defaultdict(int)  # 生肖关注度
         self.error_learning_rate = 0.2  # 错误学习率
-        print(f"初始化策略管理器: 权重={self.weights} | 强化学习已启用")
+        self.ml_model = self._load_ml_model()  # 加载ML模型
+        print(f"初始化策略管理器: 权重={self.weights} | 强化学习已启用 | ML模型{'已加载' if self.ml_model else '未找到'}")
+    
+    def _load_ml_model(self):
+        """加载预训练的ML模型"""
+        model_path = os.path.join(ML_MODEL_PATH, 'xgboost_model.pkl')
+        if os.path.exists(model_path):
+            try:
+                return joblib.load(model_path)
+            except Exception as e:
+                print(f"加载ML模型失败: {e}")
+        return None
     
     def adjust(self, accuracy, error_patterns=None):
         """根据准确率和错误模式动态调整权重 - 增强敏感度并关联错误频率"""
@@ -77,23 +89,20 @@ class StrategyManager:
                         }
         
         # 2. 基于准确率动态调整 - 大幅提升敏感度
-        # 当准确率低于60%时，大幅增加组合概率和特征重要性权重
+        # 当准确率低于60%时，大幅增加ML模型权重
         if accuracy < 0.60:
             # 计算调整幅度：与准确率偏差成比例
             accuracy_deficit = 0.60 - accuracy
             adjustment_factor = min(0.3, 0.15 + (accuracy_deficit * 1.5))
             
-            # 大幅增加组合概率权重
-            self.weights['combo'] = min(0.30, self.weights['combo'] + adjustment_factor)
-            
-            # 大幅增加特征重要性权重
-            self.weights['feature_imp'] = min(0.30, self.weights['feature_imp'] + adjustment_factor)
+            # 大幅增加ML模型权重
+            self.weights['ml_model'] = min(0.40, self.weights['ml_model'] + adjustment_factor)
             
             # 降低其他权重
-            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7p', 'rolling_30p']:
+            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7p', 'rolling_30p', 'combo', 'feature_imp']:
                 self.weights[factor] = max(0.05, self.weights[factor] - (adjustment_factor * 0.5))
             
-            print(f"准确率调整: 准确率低 ({accuracy:.2%})，大幅增加组合(+{adjustment_factor:.3f})和特征重要性权重")
+            print(f"准确率调整: 准确率低 ({accuracy:.2%})，大幅增加ML模型权重(+{adjustment_factor:.3f})")
             adjustment_made = True
         # 当准确率较高时，增加滚动窗口权重
         elif accuracy > 0.65:
@@ -106,7 +115,7 @@ class StrategyManager:
             self.weights['rolling_30p'] = min(0.25, self.weights['rolling_30p'] + adjustment_factor)
             
             # 降低其他权重
-            for factor in ['frequency', 'transition', 'season', 'festival', 'combo', 'feature_imp']:
+            for factor in ['frequency', 'transition', 'season', 'festival', 'combo', 'feature_imp', 'ml_model']:
                 self.weights[factor] = max(0.05, self.weights[factor] - (adjustment_factor * 0.3))
             
             print(f"准确率调整: 准确率高 ({accuracy:.2%})，增加滚动窗口权重(+{adjustment_factor:.3f})")
@@ -129,17 +138,17 @@ class StrategyManager:
         if len(self.accuracy_history) >= 3 and all(acc < 0.55 for acc in self.accuracy_history[-3:]):
             emergency_adjust = 0.20  # 紧急调整幅度
             
-            # 大幅增加组合概率权重
-            self.weights['combo'] = min(0.35, self.weights['combo'] + emergency_adjust)
-            
-            # 大幅增加特征重要性权重
-            self.weights['feature_imp'] = min(0.35, self.weights['feature_imp'] + emergency_adjust)
+            # 大幅增加ML模型权重
+            self.weights['ml_model'] = min(0.45, self.weights['ml_model'] + emergency_adjust)
             
             # 重置其他权重
-            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7p', 'rolling_30p']:
+            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7p', 'rolling_30p', 'combo', 'feature_imp']:
                 self.weights[factor] = max(0.05, self.weights[factor] * 0.7)  # 降低30%
             
-            print(f"紧急优化: 连续3次准确率<55%，大幅增加组合(+{emergency_adjust:.3f})和特征重要性权重")
+            print(f"紧急优化: 连续3次准确率<55%，大幅增加ML模型权重(+{emergency_adjust:.3f})")
+            
+            # 触发模型重新训练标志
+            self.retrain_needed = True
             adjustment_made = True
         
         # 归一化权重
@@ -200,6 +209,13 @@ class StrategyManager:
         combo_acc = self._validate_combo_factor(recent)
         factor_scores['combo'] = combo_acc
         
+        # 7. ML模型因子验证
+        if self.ml_model:
+            ml_acc = self._validate_ml_model(recent)
+            factor_scores['ml_model'] = ml_acc
+        else:
+            factor_scores['ml_model'] = 0.0
+        
         # 更新因子表现
         self.update_factor_performance(factor_scores)
         
@@ -215,6 +231,38 @@ class StrategyManager:
         
         print(f"因子有效性评分: {self.factor_validity}")
         return factor_scores
+    
+    def _validate_ml_model(self, df):
+        """验证ML模型有效性"""
+        if not self.ml_model:
+            return 0.0
+            
+        try:
+            from sklearn.preprocessing import LabelEncoder
+            
+            # 准备数据
+            X = df.drop(columns=['zodiac', 'date', 'expect', 'special'])
+            # 只保留数值型特征
+            X = X.select_dtypes(include=['number'])
+            y = df['zodiac']
+            
+            # 检查数据有效性
+            if X.empty or len(X) < 10:
+                print("ML模型验证失败: 数据不足或无效")
+                return 0.0
+                
+            # 编码目标变量
+            le = LabelEncoder()
+            y_encoded = le.fit_transform(y)
+            
+            # 预测
+            predictions = self.ml_model.predict(X)
+            acc = accuracy_score(y_encoded, predictions)
+            return acc
+            
+        except Exception as e:
+            print(f"ML模型验证失败: {e}")
+            return 0.0
     
     def _validate_frequency_factor(self, df):
         """验证频率因子有效性"""
@@ -404,7 +452,8 @@ class StrategyManager:
             'festival_': 'festival',
             'rolling_7p_': 'rolling_7p',  # 更新为7期
             'rolling_30p_': 'rolling_30p', # 更新为30期
-            'combo_': 'combo'
+            'combo_': 'combo',
+            'ml_feat_': 'ml_model'  # 新增ML特征映射
         }
         
         # 计算每个因子的特征重要性总和
@@ -537,6 +586,9 @@ class StrategyManager:
         # 7. 特征重要性加权预测
         imp_pred = self._importance_weighted_prediction(features)
         
+        # 8. ML模型预测
+        ml_pred = self._ml_model_prediction(features)
+        
         # 组合所有预测
         all_predictions = {
             'frequency': freq_pred,
@@ -546,7 +598,8 @@ class StrategyManager:
             'rolling_7p': rolling_pred.get('7p', []),  # 更新为7期
             'rolling_30p': rolling_pred.get('30p', []), # 更新为30期
             'combo': combo_pred,
-            'feature_imp': imp_pred
+            'feature_imp': imp_pred,
+            'ml_model': ml_pred  # 新增ML模型预测
         }
         
         # 加权融合预测
@@ -556,6 +609,30 @@ class StrategyManager:
         final_prediction = self._apply_special_attention(final_prediction, last_zodiac)
         
         return final_prediction, all_predictions
+    
+    def _ml_model_prediction(self, features):
+        """使用ML模型进行预测"""
+        if not self.ml_model:
+            return []
+            
+        try:
+            # 准备特征数据
+            X = pd.DataFrame([features])
+            # 只保留数值型特征
+            X = X.select_dtypes(include=['number'])
+            
+            # 预测
+            prediction_proba = self.ml_model.predict_proba(X)[0]
+            zodiac_indices = np.argsort(prediction_proba)[::-1][:3]  # 取概率最高的3个
+            
+            # 解码生肖
+            zodiacs = self.zodiacs
+            predictions = [zodiacs[i] for i in zodiac_indices]
+            return predictions
+            
+        except Exception as e:
+            print(f"ML模型预测失败: {e}")
+            return []
     
     def _apply_special_attention(self, prediction, last_zodiac):
         """应用特殊关注模式增强预测"""
