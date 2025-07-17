@@ -1,5 +1,3 @@
-[file name]: src/ml_predictor.py
-[file content begin]
 import pandas as pd
 import numpy as np
 import joblib
@@ -10,12 +8,12 @@ import warnings
 import logging
 
 # === 修改：XGBoost 可选导入与降级方案 ===
+XGB_INSTALLED = False
 try:
     from xgboost import XGBClassifier
     XGB_INSTALLED = True
     logging.info("XGBoost 已成功导入")
 except ImportError:
-    XGB_INSTALLED = False
     logging.warning("XGBoost 未安装，将使用随机森林作为替代模型")
 
 from sklearn.preprocessing import LabelEncoder, StandardScaler
@@ -42,14 +40,24 @@ warnings.filterwarnings('ignore')
 os.makedirs(ML_MODEL_PATH, exist_ok=True)
 
 class MLPredictor:
-    def __init__(self, model_type='xgboost'):
+    def __init__(self, model_type='auto'):
         """
         初始化机器学习预测器
         
         参数:
-            model_type: 模型类型，可选 'xgboost', 'randomforest', 'svm', 'gradientboosting'
+            model_type: 模型类型，可选 'auto', 'xgboost', 'randomforest', 'svm', 'gradientboosting'
+                       默认'auto'会自动选择最佳可用模型
         """
-        # === 修改：XGBoost 降级处理 ===
+        # 自动选择模型类型
+        if model_type == 'auto':
+            if XGB_INSTALLED:
+                model_type = 'xgboost'
+                logger.info("自动选择 XGBoost 模型")
+            else:
+                model_type = 'randomforest'
+                logger.info("自动选择 随机森林 模型")
+        
+        # 检查XGBoost可用性
         if model_type == 'xgboost' and not XGB_INSTALLED:
             logger.warning("XGBoost 不可用，自动切换为随机森林模型")
             model_type = 'randomforest'
@@ -238,7 +246,6 @@ class MLPredictor:
                 model = GradientBoostingClassifier(n_estimators=100, random_state=42, max_depth=3)
                 logger.info(f"第 {fold+1} 折 - 使用梯度提升模型")
             else:  # xgboost
-                # === 修改：XGBoost 可用性检查 ===
                 if XGB_INSTALLED:
                     model = XGBClassifier(n_estimators=100, random_state=42, max_depth=3)
                     logger.info(f"第 {fold+1} 折 - 使用XGBoost模型")
@@ -272,7 +279,7 @@ class MLPredictor:
             self.scaler = StandardScaler()
             X_scaled = self.scaler.fit_transform(X)
         
-        # === 修改：最终模型初始化 ===
+        # 初始化最终模型
         if self.model_type == 'randomforest':
             self.model = RandomForestClassifier(n_estimators=150, random_state=42, max_depth=5)
             logger.info("最终模型: 随机森林 (n_estimators=150)")
@@ -423,7 +430,7 @@ if __name__ == "__main__":
         print("无法获取数据，退出")
     else:
         # 创建预测器
-        predictor = MLPredictor(model_type='xgboost')
+        predictor = MLPredictor(model_type='auto')
         
         # 训练模型
         train_acc, test_acc = predictor.train_model(df)
@@ -446,4 +453,3 @@ if __name__ == "__main__":
             # 预测
             prediction = predictor.predict(features)
             print(f"预测结果: {prediction}")
-[file content end]
