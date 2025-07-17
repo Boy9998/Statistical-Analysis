@@ -10,8 +10,9 @@ from collections import defaultdict
 from src.strategy_manager import StrategyManager  # 导入增强的策略管理器
 import warnings
 import os
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit, KFold
 from scipy.stats import variation
+from src.ml_predictor import MLPredictor  # 导入ML预测器
 
 # 兼容不同版本 Pandas 的 SettingWithCopyWarning
 try:
@@ -70,6 +71,9 @@ class LotteryAnalyzer:
             # 初始化增强的策略管理器
             self.strategy_manager = StrategyManager()
             
+            # 初始化ML预测器
+            self.ml_predictor = MLPredictor()
+            
             # 检测历史模式
             print("检测历史模式...")
             self.patterns = self.detect_patterns()
@@ -87,6 +91,7 @@ class LotteryAnalyzer:
         else:
             print("警告：未获取到任何有效数据")
             self.strategy_manager = StrategyManager()
+            self.ml_predictor = MLPredictor()
             self.patterns = {}
     
     def add_zodiac_features(self):
@@ -482,11 +487,128 @@ class LotteryAnalyzer:
             
             # 保存错误模式分析
             self.save_error_analysis(error_patterns)
+            
+            # 检测过拟合
+            self.detect_overfitting(result_df, cv_accuracy)
         else:
             combined_accuracy = 0.0
             print("回测完成: 无有效结果")
         
         return result_df, combined_accuracy
+    
+    def detect_overfitting(self, result_df, cv_accuracy):
+        """检测并防止过拟合"""
+        if len(result_df) < 50 or cv_accuracy <= 0:
+            return
+        
+        # 计算训练集和验证集的准确率差异
+        train_accuracy = result_df['是否命中'].mean()
+        accuracy_diff = abs(train_accuracy - cv_accuracy)
+        
+        print(f"过拟合检测: 训练准确率={train_accuracy:.2%}, 验证准确率={cv_accuracy:.2%}, 差异={accuracy_diff:.2%}")
+        
+        if accuracy_diff > 0.15:  # 差异超过15%可能过拟合
+            print("警告: 检测到可能过拟合（训练集与验证集差异过大）")
+            
+            # 触发ML模型重新训练
+            print("触发ML模型重新训练以防止过拟合...")
+            self.ml_predictor.train_model(self.df, retrain=True)
+            
+            # 调整策略管理器权重
+            self.strategy_manager.weights['ml_model'] = max(0.15, self.strategy_manager.weights['ml_model'] * 0.8)
+            print(f"降低ML模型权重至 {self.strategy_manager.weights['ml_model']:.3f}")
+    
+    def kfold_cross_validation(self, n_splits=5):
+        """执行K-fold交叉验证"""
+        if self.df.empty or len(self.df) < 100:
+            print("数据不足，无法进行K-fold交叉验证")
+            return 0.0
+        
+        print(f"开始K-fold交叉验证 ({n_splits}折)...")
+        
+        # 确保数据量足够
+        if len(self.df) < n_splits * 20:
+            n_splits = max(2, len(self.df) // 20)
+            print(f"数据量不足，调整为{n_splits}折交叉验证")
+        
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        accuracies = []
+        overfit_warnings = 0
+        
+        for fold, (train_idx, test_idx) in enumerate(kf.split(self.df), 1):
+            print(f"\n--- 折 {fold}/{n_splits} ---")
+            
+            # 分割数据
+            train_data = self.df.iloc[train_idx].copy()
+            test_data = self.df.iloc[test_idx].copy()
+            
+            # 为训练数据添加特征
+            self.add_features_to_data(train_data)
+            
+            # 初始化策略管理器
+            strategy_manager = StrategyManager()
+            strategy_manager.update_combo_probs(train_data)
+            strategy_manager.evaluate_factor_validity(train_data)
+            
+            fold_hits = 0
+            fold_total = 0
+            
+            for i in range(len(test_data) - 1):
+                # 获取特征数据
+                feature_row = test_data.iloc[i]
+                last_zodiac = feature_row['zodiac']
+                
+                # 预测下一期
+                prediction, _ = strategy_manager.generate_prediction(
+                    feature_row, last_zodiac
+                )
+                
+                # 实际结果
+                actual = test_data.iloc[i+1]['zodiac']
+                
+                # 检查命中
+                if actual in prediction:
+                    fold_hits += 1
+                fold_total += 1
+            
+            fold_accuracy = fold_hits / fold_total if fold_total > 0 else 0.0
+            accuracies.append(fold_accuracy)
+            print(f"折 {fold} 准确率: {fold_accuracy:.2%} ({fold_hits}/{fold_total})")
+            
+            # 检测过拟合迹象
+            train_results = []
+            for i in range(len(train_data) - 1):
+                feature_row = train_data.iloc[i]
+                last_zodiac = feature_row['zodiac']
+                
+                prediction, _ = strategy_manager.generate_prediction(
+                    feature_row, last_zodiac
+                )
+                
+                actual = train_data.iloc[i+1]['zodiac']
+                
+                if actual in prediction:
+                    train_results.append(1)
+                else:
+                    train_results.append(0)
+            
+            train_accuracy = np.mean(train_results) if train_results else 0.0
+            accuracy_diff = abs(train_accuracy - fold_accuracy)
+            
+            if accuracy_diff > 0.15:
+                print(f"警告: 折 {fold} 可能过拟合 (训练准确率={train_accuracy:.2%}, 测试准确率={fold_accuracy:.2%})")
+                overfit_warnings += 1
+        
+        avg_accuracy = np.mean(accuracies)
+        print(f"\nK-fold交叉验证平均准确率: {avg_accuracy:.2%}")
+        
+        if overfit_warnings > n_splits // 2:
+            print(f"严重警告: {overfit_warnings}/{n_splits} 折检测到过拟合迹象")
+            # 触发模型重新训练
+            print("触发ML模型重新训练以防止过拟合...")
+            self.ml_predictor.train_model(self.df, retrain=True)
+        
+        return avg_accuracy
     
     def _calculate_data_volatility(self):
         """计算数据波动性（基于最近200期生肖频率变化）"""
@@ -796,6 +918,9 @@ class LotteryAnalyzer:
         # 回测结果
         backtest_df, accuracy = self.backtest_strategy()
         
+        # 执行K-fold交叉验证
+        kfold_accuracy = self.kfold_cross_validation()
+        
         # 预测下期
         prediction = self.predict_next()
         
@@ -833,9 +958,10 @@ class LotteryAnalyzer:
         - 生肖: {last_zodiac}
         - 出现后下期最可能出现的4个生肖: {", ".join(transition_details.get(last_zodiac, ["无数据"]))}
         
-        回测结果（自适应窗口）：
-        - 准确率：{accuracy:.2%}
-        - 命中次数：{len(backtest_df) and int(accuracy * len(backtest_df)) or 0}/{len(backtest_df) if not backtest_df.empty else 0}
+        回测结果：
+        - 主回测准确率：{accuracy:.2%}
+        - K-fold交叉验证准确率：{kfold_accuracy:.2%}
+        - 综合准确率：{(accuracy * 0.7 + kfold_accuracy * 0.3):.2%}
         
         下期预测：
         - 预测期号：{prediction['next_number']}
