@@ -54,6 +54,34 @@ class StrategyManager:
                 print(f"加载ML模型失败: {e}")
         return None
     
+    def apply_review_results(self, adjustments):
+        """应用历史复盘结果 - 新增方法"""
+        if not adjustments:
+            print("无复盘结果需要应用")
+            return
+        
+        print("应用历史复盘结果:")
+        for adj in adjustments:
+            pattern = adj['pattern']
+            weight_adj = adj['weight_adjustment']
+            
+            # 更新或添加特殊关注模式
+            if pattern in self.special_attention_patterns:
+                # 如果模式已存在，更新权重倍数
+                self.special_attention_patterns[pattern]['weight_multiplier'] = max(
+                    1.5, 
+                    self.special_attention_patterns[pattern]['weight_multiplier'] * weight_adj
+                )
+                print(f"- 更新模式权重: {pattern} -> 新权重倍数: {self.special_attention_patterns[pattern]['weight_multiplier']:.2f}")
+            else:
+                # 添加新关注模式
+                self.special_attention_patterns[pattern] = {
+                    'weight_multiplier': weight_adj,
+                    'last_occurrence': datetime.now(),
+                    'error_count': 0
+                }
+                print(f"- 新增关注模式: {pattern} -> 权重倍数: {weight_adj:.2f}")
+    
     def adjust(self, accuracy, error_patterns=None):
         """根据准确率和错误模式动态调整权重 - 增强敏感度并关联错误频率"""
         self.accuracy_history.append(accuracy)
