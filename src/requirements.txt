@@ -1,5 +1,4 @@
-[file name]: requirements.txt
-[file content begin]
+# requirements.txt
 # 核心数据处理
 requests==2.31.0
 pandas==2.0.3
@@ -29,4 +28,3 @@ jupyter==1.0.0
 
 # 性能优化
 numba==0.59.0
-[file content end]
