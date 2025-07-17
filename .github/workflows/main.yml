@@ -1,72 +1,83 @@
 [file name]: .github/workflows/main.yml
 [file content begin]
-name: Lottery Analysis Pipeline
+name: Lottery Analysis
 
 on:
   schedule:
-    - cron: '0 10 * * *'  # 每天UTC 10:00 (北京时间18:00)
+    - cron: '0 10 * * *'  # 每天UTC 10:00运行 (北京时间18:00)
   workflow_dispatch:  # 允许手动触发
-  push:
-    branches: [ main ]
 
 jobs:
-  analyze:
+  analyze-and-notify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        
+      
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-        cache: 'pip'
         
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libgomp1
-        
-    - name: Install Python dependencies
+    - name: Cache Python dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install core dependencies
       run: |
         pip install --upgrade pip
-        pip install -r src/requirements.txt || (
-          echo "::warning::Failed to install from requirements.txt, falling back to core dependencies"
-          pip install pandas numpy scikit-learn xgboost requests lunarcalendar
-        )
+        pip install numpy pandas scikit-learn requests
         
-    - name: Verify imports
+    - name: Install xgboost
+      run: pip install xgboost==1.7.6
+      
+    - name: Install project dependencies
       run: |
-        python -c "
-        from src.data_processor import add_temporal_features
-        from src.analysis import LotteryAnalyzer
-        from src.utils import send_dingtalk
-        print('Import verification passed')
-        "
+        if [ -f "src/requirements.txt" ]; then
+          pip install -r src/requirements.txt
+        else
+          echo "未找到 requirements.txt，安装基础依赖"
+          pip install lunarcalendar python-dotenv
+        fi
         
     - name: Run analysis
       env:
+        # 钉钉配置
         DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
         DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+        
+        # 邮箱配置
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
         EMAIL_PWD: ${{ secrets.EMAIL_PWD }}
         EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-      run: |
-        python run.py || (
-          echo "::error::Analysis failed"
-          exit 1
-        )
         
-    - name: Upload logs
-      if: always()
-      uses: actions/upload-artifact@v3
-      with:
-        name: analysis-logs
-        path: |
-          src/ml_predictor.log
-          models/training.log
+        # 调试模式
+        DEBUG_MODE: "true"
+      run: |
+        echo "===== 环境变量检查 ====="
+        echo "DINGTALK_WEBHOOK: ${DINGTALK_WEBHOOK:0:10}..."
+        echo "EMAIL_USER: ${EMAIL_USER:0:10}..."
+        echo "当前目录: $(pwd)"
+        echo "文件列表:"
+        ls -la
+        
+        echo "===== 运行分析 ====="
+        python run.py 2>&1 | tee analysis.log
+        
+        echo "===== 日志输出 ====="
+        cat analysis.log
+        
+        # 检查运行结果
+        if grep -q "分析任务完成" analysis.log; then
+          echo "分析任务成功完成"
+          exit 0
+        else
+          echo "分析任务失败"
+          exit 1
+        fi
 [file content end]
