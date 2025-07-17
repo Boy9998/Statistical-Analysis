@@ -20,9 +20,12 @@ jobs:
       with:
         python-version: "3.10"
         
-    - name: Install dependencies
-      run: pip install -r src/requirements.txt
-      
+    - name: Install core dependencies
+      run: |
+        pip install --upgrade pip
+        pip install numpy pandas scikit-learn requests
+        pip install lunarcalendar python-dotenv
+        
     - name: Install xgboost
       run: pip install xgboost==1.7.6
       
