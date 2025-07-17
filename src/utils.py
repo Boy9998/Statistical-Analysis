@@ -12,7 +12,7 @@ import base64
 import urllib.parse
 import time
 import re
-import csv  # 新增导入
+import csv
 
 def fetch_historical_data():
     """获取2023年至今的真实历史开奖数据"""
@@ -151,6 +151,45 @@ def zodiac_mapping(number, year):
     # 默认返回未知
     return "未知"
 
+def save_prediction_record(expect, date, last_zodiac, predicted_zodiacs, actual_zodiac, is_hit):
+    """
+    保存预测记录到CSV文件 - 新增函数用于历史复盘
+    """
+    # 确保数据目录存在
+    os.makedirs('data', exist_ok=True)
+    
+    # 创建新记录
+    new_record = {
+        '期号': expect,
+        '日期': date,
+        '上期生肖': last_zodiac,
+        '预测生肖': ", ".join(predicted_zodiacs),
+        '实际生肖': actual_zodiac,
+        '是否命中': is_hit
+    }
+    
+    # 文件路径
+    file_path = 'data/predictions.csv'
+    
+    try:
+        # 如果文件不存在，创建新文件并写入表头
+        if not os.path.exists(file_path):
+            df = pd.DataFrame([new_record])
+            df.to_csv(file_path, index=False, encoding='utf-8-sig')
+            print(f"创建新的预测记录文件: {file_path}")
+        else:
+            # 追加记录
+            df = pd.read_csv(file_path)
+            new_df = pd.DataFrame([new_record])
+            df = pd.concat([df, new_df], ignore_index=True)
+            df.to_csv(file_path, index=False, encoding='utf-8-sig')
+        
+        print(f"预测记录已保存: 期号={expect}, 日期={date}")
+        return True
+    except Exception as e:
+        print(f"保存预测记录失败: {e}")
+        return False
+
 def send_dingtalk(message, webhook):
     """发送钉钉通知（支持加签验证）"""
     secret = os.getenv("DINGTALK_SECRET")
@@ -277,6 +316,18 @@ if __name__ == "__main__":
         print(f"\n{year}年生肖映射:")
         for num in test_numbers:
             print(f"号码 {num} -> 生肖: {zodiac_mapping(num, year)}")
+    
+    # 测试预测记录保存功能
+    print("\n测试预测记录保存功能...")
+    save_prediction_record(
+        expect="2024001",
+        date="2024-01-01",
+        last_zodiac="兔",
+        predicted_zodiacs=["龙", "蛇", "马", "羊"],
+        actual_zodiac="龙",
+        is_hit=1
+    )
+    print("预测记录保存测试完成")
     
     # 测试通知功能（需要设置环境变量）
     print("\n测试通知功能...")
