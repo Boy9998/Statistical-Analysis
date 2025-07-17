@@ -1,5 +1,3 @@
-[file name]: run.py
-[file content begin]
 import os
 import sys
 import traceback
@@ -14,82 +12,84 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 sys.path.append(os.path.join(current_dir, "src"))
 
-print(f"当前工作目录: {os.getcwd()}")
-print(f"系统路径: {sys.path}")
-
-# === 新增：依赖检查与安装功能 ===
 def check_dependencies():
     """检查并安装缺失的依赖项"""
-    # 定义依赖文件路径
     req_file = os.path.join(current_dir, "requirements.txt")
     
-    # 检查依赖文件是否存在
     if not os.path.exists(req_file):
-        print(f"错误: 依赖文件不存在 {req_file}")
-        print("请确保requirements.txt文件存在")
+        print(f"Error: Requirements file not found at {req_file}")
         return False
     
     print("=" * 50)
-    print("开始依赖检查...")
-    print(f"使用依赖文件: {req_file}")
+    print("Checking dependencies...")
+    print(f"Using requirements file: {req_file}")
     
     try:
-        # 读取依赖文件
+        # 读取依赖文件并过滤有效内容
         with open(req_file, 'r') as f:
-            required_packages = [line.strip() for line in f.readlines() 
-                                if line.strip() and not line.startswith('#')]
+            required_packages = []
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    pkg = line.split('#')[0].strip()  # 移除行内注释
+                    if pkg:
+                        required_packages.append(pkg)
+        
+        if not required_packages:
+            print("Warning: No valid dependencies found in requirements.txt")
+            return True
         
         # 检查已安装的包
-        installed_packages = {pkg.key: pkg.version for pkg in pkg_resources.working_set}
-        missing_packages = []
+        installed = {pkg.key: pkg.version for pkg in pkg_resources.working_set}
+        missing = []
+        version_mismatch = []
         
-        # 检查每个依赖
-        for package in required_packages:
-            # 解析包名和版本
-            if '==' in package:
-                pkg_name, required_version = package.split('==')
+        for pkg_spec in required_packages:
+            if '==' in pkg_spec:
+                pkg_name, req_version = pkg_spec.split('==', 1)
+                pkg_name = pkg_name.lower().strip()
+                req_version = req_version.strip()
             else:
-                pkg_name = package
-                required_version = None
+                pkg_name = pkg_spec.lower().strip()
+                req_version = None
             
-            # 检查是否已安装
-            if pkg_name.lower() in installed_packages:
-                if required_version:
-                    installed_version = installed_packages[pkg_name.lower()]
-                    if installed_version != required_version:
-                        print(f"版本不匹配: {pkg_name} (需要 {required_version}, 已安装 {installed_version})")
-                        missing_packages.append(package)
-                else:
-                    print(f"已安装: {pkg_name}")
+            if pkg_name in installed:
+                if req_version and installed[pkg_name] != req_version:
+                    version_mismatch.append(f"{pkg_name} (required: {req_version}, installed: {installed[pkg_name]})")
             else:
-                print(f"缺失: {package}")
-                missing_packages.append(package)
+                missing.append(pkg_spec)
         
-        # 如果没有缺失，直接返回
-        if not missing_packages:
-            print("所有依赖已满足 ✓")
+        if not missing and not version_mismatch:
+            print("All dependencies are satisfied ✓")
             print("=" * 50)
             return True
         
-        print(f"\n检测到 {len(missing_packages)} 个缺失依赖")
+        if version_mismatch:
+            print("Version mismatches detected:")
+            for item in version_mismatch:
+                print(f" - {item}")
+        
+        if missing:
+            print(f"Missing packages: {', '.join(missing)}")
+        
         print("=" * 50)
         
         # 尝试安装缺失依赖
-        try:
-            print("尝试安装缺失依赖...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_file])
-            print("依赖安装成功 ✓")
-            print("=" * 50)
-            print("请重新运行程序")
-            return False  # 需要重启
-        except subprocess.CalledProcessError as e:
-            print(f"依赖安装失败: {e}")
-            print("请手动执行以下命令安装依赖:")
-            print(f"pip install -r {req_file}")
-            return False
+        if missing:
+            print("Attempting to install missing packages...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
+                print("Installation successful ✓")
+                print("Please restart the program")
+                return False
+            except subprocess.CalledProcessError as e:
+                print(f"Installation failed: {e}")
+                print("Please install manually with:")
+                print(f"pip install {' '.join(missing)}")
+                return False
     
     except Exception as e:
-        print(f"依赖检查失败: {str(e)}")
+        print(f"Dependency check failed: {str(e)}")
         print(traceback.format_exc())
         return False
 
@@ -108,9 +108,9 @@ try:
     )
     from src.analysis import LotteryAnalyzer
     from src.utils import send_dingtalk, send_email, log_error
-    print("成功从 src 包导入模块")
+    print("Successfully imported modules from src package")
 except ImportError as e:
-    print(f"从 src 包导入失败: {e}")
+    print(f"Import from src package failed: {e}")
     try:
         # 尝试直接导入模块
         from data_processor import (
@@ -122,9 +122,9 @@ except ImportError as e:
         )
         from analysis import LotteryAnalyzer
         from utils import send_dingtalk, send_email, log_error
-        print("成功直接导入模块")
+        print("Successfully imported modules directly")
     except ImportError as e:
-        print(f"直接导入失败: {e}")
+        print(f"Direct import failed: {e}")
         try:
             # 尝试相对导入
             from .data_processor import (
@@ -136,10 +136,10 @@ except ImportError as e:
             )
             from .analysis import LotteryAnalyzer
             from .utils import send_dingtalk, send_email, log_error
-            print("成功使用相对导入")
+            print("Successfully used relative imports")
         except ImportError as e:
-            print(f"相对导入失败: {e}")
-            print("尝试最后手段：动态导入")
+            print(f"Relative import failed: {e}")
+            print("Attempting dynamic import...")
             import importlib.util
             
             def load_module(module_path):
@@ -160,98 +160,88 @@ except ImportError as e:
                 add_festival_features = data_processor.add_festival_features
                 add_season_features = data_processor.add_season_features
                 add_rolling_features = data_processor.add_rolling_features
-                print("成功加载 data_processor 模块")
+                print("Successfully loaded data_processor module")
             else:
-                print(f"错误: 文件不存在 {data_processor_path}")
-                raise ImportError(f"文件不存在 {data_processor_path}")
+                raise ImportError(f"File not found: {data_processor_path}")
             
             if os.path.exists(analysis_path):
                 analysis = load_module(analysis_path)
                 LotteryAnalyzer = analysis.LotteryAnalyzer
-                print("成功加载 analysis 模块")
+                print("Successfully loaded analysis module")
             else:
-                print(f"错误: 文件不存在 {analysis_path}")
-                raise ImportError(f"文件不存在 {analysis_path}")
+                raise ImportError(f"File not found: {analysis_path}")
             
             if os.path.exists(utils_path):
                 utils = load_module(utils_path)
                 send_dingtalk = utils.send_dingtalk
                 send_email = utils.send_email
                 log_error = utils.log_error
-                print("成功加载 utils 模块")
+                print("Successfully loaded utils module")
             else:
-                print(f"错误: 文件不存在 {utils_path}")
-                raise ImportError(f"文件不存在 {utils_path}")
+                raise ImportError(f"File not found: {utils_path}")
             
-            print("成功使用动态导入")
+            print("Dynamic import completed")
 
 def main():
     try:
         print("=" * 50)
-        print(f"开始执行分析任务 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+        print(f"Starting analysis task [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
         print("=" * 50)
         
-        # 创建分析器
-        print("初始化分析器...")
+        print("Initializing analyzer...")
         analyzer = LotteryAnalyzer()
         
         if analyzer.df.empty:
-            print("错误：未获取到有效数据，终止分析")
+            print("Error: No valid data obtained, aborting analysis")
             return
         
-        print(f"原始数据记录数: {len(analyzer.df)}")
+        print(f"Original data records: {len(analyzer.df)}")
         
-        # 添加基础特征
-        print("添加时序特征...")
+        print("Adding temporal features...")
         analyzer.df = add_temporal_features(analyzer.df)
         
-        print("添加农历特征...")
+        print("Adding lunar features...")
         analyzer.df = add_lunar_features(analyzer.df)
         
-        print("添加节日特征...")
+        print("Adding festival features...")
         analyzer.df = add_festival_features(analyzer.df)
         
-        print("添加季节特征...")
+        print("Adding season features...")
         analyzer.df = add_season_features(analyzer.df)
         
-        # 添加滚动窗口特征
-        print("添加滚动窗口特征...")
+        print("Adding rolling window features...")
         analyzer.df = add_rolling_features(analyzer.df)
         
-        # 检查特征是否添加成功
         rolling_features = [col for col in analyzer.df.columns if col.startswith('rolling_')]
         heat_index_features = [col for col in analyzer.df.columns if col.startswith('heat_index_')]
         
-        print(f"特征工程后数据记录数: {len(analyzer.df)}")
-        print(f"添加的滚动特征数量: {len(rolling_features)}")
-        print(f"添加的热度指数特征数量: {len(heat_index_features)}")
+        print(f"Processed data records: {len(analyzer.df)}")
+        print(f"Added rolling features: {len(rolling_features)}")
+        print(f"Added heat index features: {len(heat_index_features)}")
         
-        # 生成报告
-        print("\n生成分析报告...")
+        print("\nGenerating analysis report...")
         report = analyzer.generate_report()
         
-        # 打印报告摘要
-        print("\n报告摘要:")
+        print("\nReport summary:")
         print(report.split("下期预测")[0].strip())
         
-        # 发送通知
         ding_webhook = os.getenv("DINGTALK_WEBHOOK")
         email_receiver = os.getenv("EMAIL_RECEIVER") or os.getenv("EMAIL_USER")
         
         if ding_webhook:
-            print("发送钉钉通知...")
+            print("Sending DingTalk notification...")
             send_dingtalk(report, ding_webhook)
         
         if email_receiver:
-            print("发送邮件通知...")
-            send_email("每日彩票分析报告", report, email_receiver)
+            print("Sending email notification...")
+            send_email("Daily Lottery Analysis Report", report, email_receiver)
             
         print("=" * 50)
-        print(f"分析任务完成 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+        print(f"Analysis task completed [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
         print("=" * 50)
         
     except Exception as e:
-        error_msg = f"分析任务失败: {str(e)}\n\n{traceback.format_exc()}"
+        error_msg = f"Analysis task failed: {str(e)}\n\n{traceback.format_exc()}"
         print(error_msg)
         
         log_error({
@@ -268,11 +258,10 @@ def main():
         email_receiver = os.getenv("EMAIL_RECEIVER") or os.getenv("EMAIL_USER")
         
         if ding_webhook:
-            send_dingtalk(f"分析任务失败: {str(e)}", ding_webhook)
+            send_dingtalk(f"Analysis task failed: {str(e)}", ding_webhook)
         
         if email_receiver:
-            send_email("彩票分析系统错误", error_msg, email_receiver)
+            send_email("Lottery Analysis System Error", error_msg, email_receiver)
 
 if __name__ == "__main__":
     main()
-[file content end]
