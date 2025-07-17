@@ -70,6 +70,7 @@ class MLPredictor:
         self.preprocessor = None
         self.label_encoder = LabelEncoder()
         self.feature_columns = []
+        self.feature_signature = None  # 新增: 特征签名
         self.zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
         
         # 尝试加载预训练模型
@@ -82,6 +83,7 @@ class MLPredictor:
         preprocessor_path = os.path.join(ML_MODEL_PATH, 'preprocessor.pkl')
         encoder_path = os.path.join(ML_MODEL_PATH, 'label_encoder.pkl')
         features_path = os.path.join(ML_MODEL_PATH, 'feature_columns.txt')
+        signature_path = os.path.join(ML_MODEL_PATH, 'feature_signature.pkl')  # 新增
         
         try:
             if os.path.exists(model_path):
@@ -97,10 +99,15 @@ class MLPredictor:
                 with open(features_path, 'r') as f:
                     self.feature_columns = f.read().splitlines()
                 logger.info(f"已加载{len(self.feature_columns)}个特征列")
+            # 新增: 加载特征签名
+            if os.path.exists(signature_path):
+                self.feature_signature = joblib.load(signature_path)
+                logger.info("已加载特征签名")
         except Exception as e:
             logger.error(f"加载模型失败: {e}")
             self.model = None
             self.preprocessor = None
+            self.feature_signature = None
     
     def save_model(self):
         """保存模型和预处理工具"""
@@ -112,6 +119,7 @@ class MLPredictor:
         preprocessor_path = os.path.join(ML_MODEL_PATH, 'preprocessor.pkl')
         encoder_path = os.path.join(ML_MODEL_PATH, 'label_encoder.pkl')
         features_path = os.path.join(ML_MODEL_PATH, 'feature_columns.txt')
+        signature_path = os.path.join(ML_MODEL_PATH, 'feature_signature.pkl')  # 新增
         
         try:
             joblib.dump(self.model, model_path)
@@ -120,6 +128,10 @@ class MLPredictor:
             joblib.dump(self.label_encoder, encoder_path)
             with open(features_path, 'w') as f:
                 f.write('\n'.join(self.feature_columns))
+            # 新增: 保存特征签名
+            if self.feature_signature is not None:
+                joblib.dump(self.feature_signature, signature_path)
+                logger.info(f"特征签名已保存到: {signature_path}")
             logger.info(f"模型已保存到: {model_path}")
         except Exception as e:
             logger.error(f"保存模型失败: {e}")
@@ -185,8 +197,21 @@ class MLPredictor:
         # 编码目标变量
         y_encoded = self.label_encoder.fit_transform(y)
         
+        # 新增: 创建特征签名
+        self.create_feature_signature(X)
+        
         logger.info(f"数据准备完成，特征维度: {X.shape}")
         return X, y_encoded
+    
+    def create_feature_signature(self, X):
+        """创建特征签名用于版本控制"""
+        self.feature_signature = {
+            'columns': list(X.columns),
+            'dtypes': {col: str(X[col].dtype) for col in X.columns},
+            'shape': (len(X.columns),),
+            'hash': hash(tuple(X.columns))
+        }
+        logger.info(f"创建特征签名: {self.feature_signature['hash']}")
     
     def create_preprocessor(self, X):
         """创建特征预处理器，正确处理分类特征"""
@@ -214,6 +239,60 @@ class MLPredictor:
             ])
         
         return preprocessor
+    
+    def validate_feature_signature(self, X):
+        """验证输入特征与训练特征签名是否匹配"""
+        if self.feature_signature is None:
+            logger.warning("无特征签名可用，跳过验证")
+            return False
+        
+        # 检查特征列
+        if set(X.columns) != set(self.feature_signature['columns']):
+            logger.error(f"特征列不匹配! 训练列: {self.feature_signature['columns']}, 输入列: {list(X.columns)}")
+            return False
+        
+        # 检查特征顺序
+        if list(X.columns) != self.feature_signature['columns']:
+            logger.warning("特征顺序不匹配，将调整顺序")
+            X = X[self.feature_signature['columns']]
+        
+        # 检查数据类型
+        for col, dtype in self.feature_signature['dtypes'].items():
+            if str(X[col].dtype) != dtype:
+                logger.error(f"特征 '{col}' 数据类型不匹配! 训练: {dtype}, 输入: {X[col].dtype}")
+                return False
+        
+        logger.info("特征签名验证通过")
+        return True
+    
+    def align_features(self, features):
+        """
+        对齐特征，确保与训练特征一致
+        1. 添加缺失的特征列并用0填充
+        2. 移除多余的特征列
+        3. 确保特征顺序一致
+        """
+        aligned_features = {}
+        
+        # 如果特征签名不可用，直接返回原始特征
+        if self.feature_signature is None:
+            logger.warning("无特征签名可用，跳过特征对齐")
+            return features
+        
+        # 确保所有特征都存在
+        for col in self.feature_signature['columns']:
+            if col in features:
+                aligned_features[col] = features[col]
+            else:
+                logger.warning(f"特征 '{col}' 缺失，填充默认值0")
+                aligned_features[col] = 0
+        
+        # 移除多余特征
+        extra_cols = set(features.keys()) - set(self.feature_signature['columns'])
+        if extra_cols:
+            logger.warning(f"移除多余特征: {extra_cols}")
+        
+        return aligned_features
     
     def train_model(self, df, test_size=0.2, retrain=False):
         """
@@ -339,16 +418,16 @@ class MLPredictor:
             logger.warning("特征列未定义，返回空预测")
             return []
         
+        # 对齐特征
+        aligned_features = self.align_features(features)
+        
         # 创建特征DataFrame
-        X = pd.DataFrame([features])
+        X = pd.DataFrame([aligned_features])
         
-        # 只保留需要的特征
-        available_features = [col for col in self.feature_columns if col in X.columns]
-        if not available_features:
-            logger.warning("没有匹配的特征列，返回空预测")
+        # 验证特征签名
+        if not self.validate_feature_signature(X):
+            logger.error("特征签名验证失败! 请重新训练模型")
             return []
-        
-        X = X[available_features]
         
         # 特征预处理
         try:
@@ -391,6 +470,11 @@ class MLPredictor:
         
         # 准备数据
         X, y = self.prepare_data(df)
+        
+        # 验证特征签名
+        if not self.validate_feature_signature(X):
+            logger.error("特征签名验证失败! 请重新训练模型")
+            return 0.0
         
         if self.preprocessor:
             X_processed = self.preprocessor.transform(X)
