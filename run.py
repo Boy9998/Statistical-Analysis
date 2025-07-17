@@ -1,8 +1,13 @@
+[file name]: run.py
+[file content begin]
 import os
 import sys
 import traceback
 import numpy as np
 from datetime import datetime
+import subprocess
+import importlib.util
+import pkg_resources
 
 # 确保正确导入路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -11,6 +16,86 @@ sys.path.append(os.path.join(current_dir, "src"))
 
 print(f"当前工作目录: {os.getcwd()}")
 print(f"系统路径: {sys.path}")
+
+# === 新增：依赖检查与安装功能 ===
+def check_dependencies():
+    """检查并安装缺失的依赖项"""
+    # 定义依赖文件路径
+    req_file = os.path.join(current_dir, "requirements.txt")
+    
+    # 检查依赖文件是否存在
+    if not os.path.exists(req_file):
+        print(f"错误: 依赖文件不存在 {req_file}")
+        print("请确保requirements.txt文件存在")
+        return False
+    
+    print("=" * 50)
+    print("开始依赖检查...")
+    print(f"使用依赖文件: {req_file}")
+    
+    try:
+        # 读取依赖文件
+        with open(req_file, 'r') as f:
+            required_packages = [line.strip() for line in f.readlines() 
+                                if line.strip() and not line.startswith('#')]
+        
+        # 检查已安装的包
+        installed_packages = {pkg.key: pkg.version for pkg in pkg_resources.working_set}
+        missing_packages = []
+        
+        # 检查每个依赖
+        for package in required_packages:
+            # 解析包名和版本
+            if '==' in package:
+                pkg_name, required_version = package.split('==')
+            else:
+                pkg_name = package
+                required_version = None
+            
+            # 检查是否已安装
+            if pkg_name.lower() in installed_packages:
+                if required_version:
+                    installed_version = installed_packages[pkg_name.lower()]
+                    if installed_version != required_version:
+                        print(f"版本不匹配: {pkg_name} (需要 {required_version}, 已安装 {installed_version})")
+                        missing_packages.append(package)
+                else:
+                    print(f"已安装: {pkg_name}")
+            else:
+                print(f"缺失: {package}")
+                missing_packages.append(package)
+        
+        # 如果没有缺失，直接返回
+        if not missing_packages:
+            print("所有依赖已满足 ✓")
+            print("=" * 50)
+            return True
+        
+        print(f"\n检测到 {len(missing_packages)} 个缺失依赖")
+        print("=" * 50)
+        
+        # 尝试安装缺失依赖
+        try:
+            print("尝试安装缺失依赖...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_file])
+            print("依赖安装成功 ✓")
+            print("=" * 50)
+            print("请重新运行程序")
+            return False  # 需要重启
+        except subprocess.CalledProcessError as e:
+            print(f"依赖安装失败: {e}")
+            print("请手动执行以下命令安装依赖:")
+            print(f"pip install -r {req_file}")
+            return False
+    
+    except Exception as e:
+        print(f"依赖检查失败: {str(e)}")
+        print(traceback.format_exc())
+        return False
+
+# 在导入其他模块前检查依赖
+if not check_dependencies():
+    sys.exit(1)
 
 try:
     # 尝试从 src 包导入
@@ -190,3 +275,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+[file content end]
