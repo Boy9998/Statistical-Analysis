@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from src.utils import fetch_historical_data, zodiac_mapping, log_error
+from src.utils import fetch_historical_data, zodiac_mapping, log_error, save_prediction_record
 from config import BACKTEST_WINDOW
 from datetime import datetime, timedelta
 import holidays
@@ -88,6 +88,7 @@ class LotteryAnalyzer:
             
             # 创建错误分析目录
             os.makedirs('error_analysis', exist_ok=True)
+            os.makedirs('data', exist_ok=True)  # 确保数据目录存在
         else:
             print("警告：未获取到任何有效数据")
             self.strategy_manager = StrategyManager()
@@ -447,6 +448,16 @@ class LotteryAnalyzer:
                 '是否命中': is_hit
             })
             
+            # 保存预测记录到CSV文件（新增历史复盘功能）
+            save_prediction_record(
+                expect=test['expect'].values[0],
+                date=test['date'].dt.strftime('%Y-%m-%d').values[0],
+                last_zodiac=last_zodiac,
+                predicted_zodiacs=prediction,
+                actual_zodiac=actual,
+                is_hit=is_hit
+            )
+            
             # 记录错误模式
             if not is_hit:
                 error_data = {
@@ -679,7 +690,7 @@ class LotteryAnalyzer:
                 
                 # 在策略管理器中标记这个模式需要更多关注
                 self.strategy_manager.special_attention_patterns[f"{last_zodiac}-{actual}"] = {
-                    'weight_multiplier': 1.5,  # 权重增加50%
+                    'weight_multiplier': 1.5 + (count * 0.05),  # 错误次数越多，权重倍数越高
                     'last_occurrence': datetime.now(),
                     'error_count': count
                 }
@@ -899,6 +910,61 @@ class LotteryAnalyzer:
             'factor_predictions': factor_predictions
         }
     
+    def analyze_history(self):
+        """历史预测复盘分析 - 新增核心功能"""
+        print("开始历史预测复盘分析...")
+        
+        # 检查预测记录文件是否存在
+        prediction_file = 'data/predictions.csv'
+        if not os.path.exists(prediction_file):
+            print("警告: 未找到预测记录文件，无法进行复盘分析")
+            return {}
+        
+        # 加载预测记录
+        try:
+            records = pd.read_csv(prediction_file)
+            if records.empty:
+                print("预测记录为空，无法分析")
+                return {}
+        except Exception as e:
+            print(f"加载预测记录失败: {e}")
+            return {}
+        
+        # 提取错误记录
+        errors = records[records['是否命中'] == 0]
+        total_errors = len(errors)
+        
+        if total_errors == 0:
+            print("未发现预测错误记录")
+            return {}
+        
+        print(f"发现 {total_errors} 条错误预测记录")
+        
+        # 分析错误模式
+        pattern_counts = errors.groupby(['上期生肖', '实际生肖']).size().reset_index(name='错误次数')
+        top_patterns = pattern_counts.sort_values('错误次数', ascending=False).head(3)
+        
+        # 生成调整建议
+        adjustments = []
+        for idx, row in top_patterns.iterrows():
+            last_zodiac = row['上期生肖']
+            actual = row['实际生肖']
+            count = row['错误次数']
+            
+            adjustments.append({
+                'pattern': f"{last_zodiac}-{actual}",
+                'weight_adjustment': min(1.5, 1 + count / 10)  # 动态权重调整
+            })
+        
+        print("TOP 3 高频错误模式:")
+        for adj in adjustments:
+            print(f"- {adj['pattern']}: 权重调整系数={adj['weight_adjustment']:.2f}")
+        
+        # 应用调整建议
+        self.strategy_manager.apply_review_results(adjustments)
+        
+        return top_patterns.to_dict('records')
+    
     def generate_report(self):
         """生成符合要求的分析报告 - 包含动态回测信息"""
         if self.df.empty:
@@ -911,6 +977,9 @@ class LotteryAnalyzer:
         last_expect = latest['expect']
         last_zodiac = latest['zodiac']
         last_date = latest['date'].strftime('%Y-%m-%d')
+        
+        # 执行历史复盘分析
+        history_review = self.analyze_history()
         
         # 生肖分析
         analysis = self.analyze_zodiac_patterns()
@@ -963,6 +1032,9 @@ class LotteryAnalyzer:
         - K-fold交叉验证准确率：{kfold_accuracy:.2%}
         - 综合准确率：{(accuracy * 0.7 + kfold_accuracy * 0.3):.2%}
         
+        历史复盘分析：
+        {self.format_history_review(history_review)}
+        
         下期预测：
         - 预测期号：{prediction['next_number']}
         - 推荐生肖：{", ".join(prediction['prediction'])}
@@ -982,3 +1054,17 @@ class LotteryAnalyzer:
         
         print("分析报告生成完成")
         return report
+    
+    def format_history_review(self, review_data):
+        """格式化历史复盘结果"""
+        if not review_data:
+            return "未发现显著错误模式"
+        
+        formatted = []
+        for item in review_data:
+            last_zodiac = item['上期生肖']
+            actual = item['实际生肖']
+            count = item['错误次数']
+            formatted.append(f"- {last_zodiac}→{actual}: {count}次错误")
+        
+        return "\n".join(formatted)
