@@ -33,7 +33,7 @@ def check_dependencies():
             'numpy>=1.24.4',
             'scikit-learn>=1.3.2',
             'requests>=2.31.0',
-            'xgboost>=1.7.6'  # 添加 xgboost 依赖
+            'xgboost>=1.7.0'  # 添加xgboost为核心依赖
         ]
         required_packages = core_dependencies
         print("Checking core dependencies only:")
@@ -125,6 +125,17 @@ def check_dependencies():
         print(traceback.format_exc())
         return False
 
+def import_module(module_path):
+    """动态导入模块"""
+    try:
+        spec = importlib.util.spec_from_file_location("module", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception as e:
+        print(f"Failed to import module from {module_path}: {e}")
+        return None
+
 # 设置工作目录为脚本所在目录
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -137,10 +148,49 @@ sys.path.append(os.path.join(current_dir, "src"))
 if not check_dependencies():
     sys.exit(1)
 
-# === 修复：使用绝对导入替代动态导入 ===
-from src.data_processor import add_temporal_features, add_lunar_features, add_festival_features, add_season_features, add_rolling_features
-from src.analysis import LotteryAnalyzer
-from src.utils import send_dingtalk, send_email, log_error
+# 动态导入模块 - 使用绝对路径
+try:
+    from src.data_processor import (
+        add_temporal_features,
+        add_lunar_features,
+        add_festival_features,
+        add_season_features,
+        add_rolling_features
+    )
+    from src.analysis import LotteryAnalyzer
+    from src.utils import (
+        send_dingtalk,
+        send_email,
+        log_error
+    )
+    print("Successfully imported modules using absolute imports")
+except ImportError as e:
+    print(f"Absolute import failed: {e}")
+    print("Falling back to dynamic import...")
+    
+    # 动态导入回退方案
+    data_processor_path = os.path.join(current_dir, "src", "data_processor.py")
+    analysis_path = os.path.join(current_dir, "src", "analysis.py")
+    utils_path = os.path.join(current_dir, "src", "utils.py")
+
+    data_processor = import_module(data_processor_path)
+    analysis = import_module(analysis_path)
+    utils = import_module(utils_path)
+
+    if not all([data_processor, analysis, utils]):
+        print("Critical modules missing, exiting...")
+        sys.exit(1)
+
+    # 获取具体功能
+    add_temporal_features = getattr(data_processor, 'add_temporal_features', None)
+    add_lunar_features = getattr(data_processor, 'add_lunar_features', None)
+    add_festival_features = getattr(data_processor, 'add_festival_features', None)
+    add_season_features = getattr(data_processor, 'add_season_features', None)
+    add_rolling_features = getattr(data_processor, 'add_rolling_features', None)
+    LotteryAnalyzer = getattr(analysis, 'LotteryAnalyzer', None)
+    send_dingtalk = getattr(utils, 'send_dingtalk', None)
+    send_email = getattr(utils, 'send_email', None)
+    log_error = getattr(utils, 'log_error', None)
 
 def main():
     try:
