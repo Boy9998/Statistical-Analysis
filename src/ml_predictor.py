@@ -1,16 +1,39 @@
+[file name]: src/ml_predictor.py
+[file content begin]
 import pandas as pd
 import numpy as np
 import joblib
 import os
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
-from xgboost import XGBClassifier
+import warnings
+import logging
+
+# === 修改：XGBoost 可选导入与降级方案 ===
+try:
+    from xgboost import XGBClassifier
+    XGB_INSTALLED = True
+    logging.info("XGBoost 已成功导入")
+except ImportError:
+    XGB_INSTALLED = False
+    logging.warning("XGBoost 未安装，将使用随机森林作为替代模型")
+
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split, TimeSeriesSplit
 from sklearn.metrics import accuracy_score
 from config import ML_MODEL_PATH
 from src.utils import fetch_historical_data
-import warnings
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(os.path.join(ML_MODEL_PATH, 'ml_predictor.log'))
+    ]
+)
+logger = logging.getLogger('MLPredictor')
 
 # 忽略警告
 warnings.filterwarnings('ignore')
@@ -26,6 +49,11 @@ class MLPredictor:
         参数:
             model_type: 模型类型，可选 'xgboost', 'randomforest', 'svm', 'gradientboosting'
         """
+        # === 修改：XGBoost 降级处理 ===
+        if model_type == 'xgboost' and not XGB_INSTALLED:
+            logger.warning("XGBoost 不可用，自动切换为随机森林模型")
+            model_type = 'randomforest'
+        
         self.model_type = model_type
         self.model = None
         self.scaler = None
@@ -35,6 +63,7 @@ class MLPredictor:
         
         # 尝试加载预训练模型
         self.load_model()
+        logger.info(f"MLPredictor 初始化完成，使用模型: {model_type}")
     
     def load_model(self):
         """加载预训练的模型和预处理工具"""
@@ -46,26 +75,26 @@ class MLPredictor:
         try:
             if os.path.exists(model_path):
                 self.model = joblib.load(model_path)
-                print(f"已加载预训练的{self.model_type}模型")
+                logger.info(f"已加载预训练的{self.model_type}模型")
             if os.path.exists(scaler_path):
                 self.scaler = joblib.load(scaler_path)
-                print("已加载特征缩放器")
+                logger.info("已加载特征缩放器")
             if os.path.exists(encoder_path):
                 self.label_encoder = joblib.load(encoder_path)
-                print("已加载标签编码器")
+                logger.info("已加载标签编码器")
             if os.path.exists(features_path):
                 with open(features_path, 'r') as f:
                     self.feature_columns = f.read().splitlines()
-                print(f"已加载{len(self.feature_columns)}个特征列")
+                logger.info(f"已加载{len(self.feature_columns)}个特征列")
         except Exception as e:
-            print(f"加载模型失败: {e}")
+            logger.error(f"加载模型失败: {e}")
             self.model = None
             self.scaler = None
     
     def save_model(self):
         """保存模型和预处理工具"""
         if self.model is None:
-            print("无法保存模型 - 模型未训练")
+            logger.warning("无法保存模型 - 模型未训练")
             return
         
         model_path = os.path.join(ML_MODEL_PATH, f'{self.model_type}_model.pkl')
@@ -80,9 +109,9 @@ class MLPredictor:
             joblib.dump(self.label_encoder, encoder_path)
             with open(features_path, 'w') as f:
                 f.write('\n'.join(self.feature_columns))
-            print(f"模型已保存到: {model_path}")
+            logger.info(f"模型已保存到: {model_path}")
         except Exception as e:
-            print(f"保存模型失败: {e}")
+            logger.error(f"保存模型失败: {e}")
     
     def prepare_data(self, df):
         """
@@ -99,6 +128,7 @@ class MLPredictor:
         required_columns = ['zodiac', 'date', 'season', 'is_festival', 'weekday', 'month']
         for col in required_columns:
             if col not in df.columns:
+                logger.error(f"数据缺少必要列: {col}")
                 raise ValueError(f"数据缺少必要列: {col}")
         
         # 创建副本避免修改原始数据
@@ -153,6 +183,7 @@ class MLPredictor:
         # 编码目标变量
         y_encoded = self.label_encoder.fit_transform(y)
         
+        logger.info(f"数据准备完成，特征维度: {X.shape}")
         return X, y_encoded
     
     def train_model(self, df, test_size=0.2, retrain=False):
@@ -169,10 +200,10 @@ class MLPredictor:
         """
         # 检查是否已有模型
         if self.model and not retrain:
-            print("使用现有模型，跳过训练")
+            logger.info("使用现有模型，跳过训练")
             return 0.0, 0.0
         
-        print("开始训练机器学习模型...")
+        logger.info("开始训练机器学习模型...")
         
         # 准备数据
         X, y = self.prepare_data(df)
@@ -181,9 +212,9 @@ class MLPredictor:
         tscv = TimeSeriesSplit(n_splits=5)
         accuracies = []
         
-        print(f"使用时间序列交叉验证 ({tscv.get_n_splits()} 折)")
+        logger.info(f"使用时间序列交叉验证 ({tscv.get_n_splits()} 折)")
         
-        for train_index, test_index in tscv.split(X):
+        for fold, (train_index, test_index) in enumerate(tscv.split(X)):
             X_train, X_test = X.iloc[train_index], X.iloc[test_index]
             y_train, y_test = y[train_index], y[test_index]
             
@@ -199,12 +230,21 @@ class MLPredictor:
             # 初始化模型
             if self.model_type == 'randomforest':
                 model = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=5)
+                logger.info(f"第 {fold+1} 折 - 使用随机森林模型")
             elif self.model_type == 'svm':
                 model = SVC(probability=True, random_state=42)
+                logger.info(f"第 {fold+1} 折 - 使用SVM模型")
             elif self.model_type == 'gradientboosting':
                 model = GradientBoostingClassifier(n_estimators=100, random_state=42, max_depth=3)
+                logger.info(f"第 {fold+1} 折 - 使用梯度提升模型")
             else:  # xgboost
-                model = XGBClassifier(n_estimators=100, random_state=42, max_depth=3)
+                # === 修改：XGBoost 可用性检查 ===
+                if XGB_INSTALLED:
+                    model = XGBClassifier(n_estimators=100, random_state=42, max_depth=3)
+                    logger.info(f"第 {fold+1} 折 - 使用XGBoost模型")
+                else:
+                    logger.warning(f"第 {fold+1} 折 - XGBoost 不可用，使用随机森林替代")
+                    model = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=5)
             
             # 训练模型
             model.fit(X_train_scaled, y_train)
@@ -217,13 +257,13 @@ class MLPredictor:
             test_acc = accuracy_score(y_test, test_pred)
             
             accuracies.append((train_acc, test_acc))
-            print(f"训练准确率: {train_acc:.4f}, 测试准确率: {test_acc:.4f}")
+            logger.info(f"第 {fold+1} 折 - 训练准确率: {train_acc:.4f}, 测试准确率: {test_acc:.4f}")
         
         # 计算平均准确率
         avg_train_acc = np.mean([acc[0] for acc in accuracies])
         avg_test_acc = np.mean([acc[1] for acc in accuracies])
         
-        print(f"平均训练准确率: {avg_train_acc:.4f}, 平均测试准确率: {avg_test_acc:.4f}")
+        logger.info(f"平均训练准确率: {avg_train_acc:.4f}, 平均测试准确率: {avg_test_acc:.4f}")
         
         # 使用全部数据重新训练最终模型
         if self.scaler:
@@ -232,16 +272,27 @@ class MLPredictor:
             self.scaler = StandardScaler()
             X_scaled = self.scaler.fit_transform(X)
         
+        # === 修改：最终模型初始化 ===
         if self.model_type == 'randomforest':
             self.model = RandomForestClassifier(n_estimators=150, random_state=42, max_depth=5)
+            logger.info("最终模型: 随机森林 (n_estimators=150)")
         elif self.model_type == 'svm':
             self.model = SVC(probability=True, random_state=42)
+            logger.info("最终模型: SVM")
         elif self.model_type == 'gradientboosting':
             self.model = GradientBoostingClassifier(n_estimators=150, random_state=42, max_depth=3)
+            logger.info("最终模型: 梯度提升 (n_estimators=150)")
         else:  # xgboost
-            self.model = XGBClassifier(n_estimators=150, random_state=42, max_depth=3)
+            if XGB_INSTALLED:
+                self.model = XGBClassifier(n_estimators=150, random_state=42, max_depth=3)
+                logger.info("最终模型: XGBoost (n_estimators=150)")
+            else:
+                logger.warning("XGBoost 不可用，使用随机森林作为最终模型")
+                self.model = RandomForestClassifier(n_estimators=150, random_state=42, max_depth=5)
         
+        # 训练最终模型
         self.model.fit(X_scaled, y)
+        logger.info("最终模型训练完成")
         
         # 保存模型
         self.save_model()
@@ -259,11 +310,11 @@ class MLPredictor:
             预测的生肖列表 (按概率排序)
         """
         if self.model is None:
-            print("警告: 模型未训练，返回空预测")
+            logger.warning("模型未训练，返回空预测")
             return []
         
         if not self.feature_columns:
-            print("警告: 特征列未定义，返回空预测")
+            logger.warning("特征列未定义，返回空预测")
             return []
         
         # 创建特征DataFrame
@@ -272,7 +323,7 @@ class MLPredictor:
         # 只保留需要的特征
         available_features = [col for col in self.feature_columns if col in X.columns]
         if not available_features:
-            print("警告: 没有匹配的特征列，返回空预测")
+            logger.warning("没有匹配的特征列，返回空预测")
             return []
         
         X = X[available_features]
@@ -284,20 +335,21 @@ class MLPredictor:
             else:
                 X_scaled = X.values
         except Exception as e:
-            print(f"特征缩放失败: {e}")
+            logger.error(f"特征缩放失败: {e}")
             return []
         
         # 预测概率
         try:
             probabilities = self.model.predict_proba(X_scaled)[0]
         except Exception as e:
-            print(f"预测失败: {e}")
+            logger.error(f"预测失败: {e}")
             return []
         
         # 获取概率最高的3个生肖
         top_indices = np.argsort(probabilities)[::-1][:3]
         top_zodiacs = self.label_encoder.inverse_transform(top_indices)
         
+        logger.info(f"预测完成: {top_zodiacs}")
         return list(top_zodiacs)
     
     def evaluate(self, df):
@@ -311,7 +363,7 @@ class MLPredictor:
             准确率
         """
         if self.model is None:
-            print("无法评估 - 模型未训练")
+            logger.warning("无法评估 - 模型未训练")
             return 0.0
         
         # 准备数据
@@ -327,7 +379,7 @@ class MLPredictor:
         
         # 计算准确率
         acc = accuracy_score(y, y_pred)
-        print(f"模型准确率: {acc:.4f}")
+        logger.info(f"模型准确率: {acc:.4f}")
         
         return acc
     
@@ -339,7 +391,7 @@ class MLPredictor:
             特征重要性Series (按重要性排序)
         """
         if self.model is None:
-            print("无法获取特征重要性 - 模型未训练")
+            logger.warning("无法获取特征重要性 - 模型未训练")
             return pd.Series()
         
         try:
@@ -350,14 +402,15 @@ class MLPredictor:
                 # SVM等
                 importances = np.abs(self.model.coef_[0])
             else:
-                print("无法获取特征重要性 - 模型类型不支持")
+                logger.warning("无法获取特征重要性 - 模型类型不支持")
                 return pd.Series()
             
             # 创建Series
             importance_series = pd.Series(importances, index=self.feature_columns)
+            logger.info("特征重要性计算完成")
             return importance_series.sort_values(ascending=False)
         except Exception as e:
-            print(f"获取特征重要性失败: {e}")
+            logger.error(f"获取特征重要性失败: {e}")
             return pd.Series()
 
 # 示例用法
@@ -393,3 +446,4 @@ if __name__ == "__main__":
             # 预测
             prediction = predictor.predict(features)
             print(f"预测结果: {prediction}")
+[file content end]
