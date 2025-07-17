@@ -2,39 +2,33 @@
 [file content begin]
 name: Lottery Analysis
 
-on: 
+on:
   schedule:
-    - cron: "0 10 * * *"  # 每天UTC 10:00运行 (北京时间18:00)
-  workflow_dispatch:      # 允许手动触发
+    - cron: '0 10 * * *'  # 每天UTC 10:00运行 (北京时间18:00)
+  workflow_dispatch:  # 允许手动触发
 
 jobs:
   analyze-and-notify:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
       
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
         
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install numpy pandas scikit-learn requests
-          pip install lunarcalendar python-dotenv
-          pip install xgboost==1.7.6
+    - name: Install dependencies
+      run: pip install -r src/requirements.txt
       
-      - name: Run analysis
-        env:
-          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
-          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PWD: ${{ secrets.EMAIL_PWD }}
-          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-        run: |
-          echo "Starting analysis..."
-          python run.py
+    - name: Run analysis
+      env:
+        DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+        DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PWD: ${{ secrets.EMAIL_PWD }}
+        EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+      run: python run.py
 [file content end]
