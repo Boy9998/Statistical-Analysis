@@ -33,7 +33,8 @@ def check_dependencies():
             'numpy>=1.24.4',
             'scikit-learn>=1.3.2',
             'requests>=2.31.0',
-            'xgboost>=1.7.0'  # 添加xgboost为核心依赖
+            'xgboost>=1.7.0; platform_system!="Windows"',  # Windows系统可选
+            'joblib>=1.2.0'
         ]
         required_packages = core_dependencies
         print("Checking core dependencies only:")
@@ -65,14 +66,27 @@ def check_dependencies():
         version_mismatch = []
         
         for pkg_spec in required_packages:
-            if '>=' in pkg_spec:
-                pkg_name, req_version = pkg_spec.split('>=', 1)
-                op = '>='
-            elif '==' in pkg_spec:
-                pkg_name, req_version = pkg_spec.split('==', 1)
-                op = '=='
+            # 跳过平台特定依赖检查
+            if ';' in pkg_spec:
+                pkg_name = pkg_spec.split(';')[0].strip()
+                platform_condition = pkg_spec.split(';')[1].strip()
+                
+                # 简单平台检查
+                if 'platform_system' in platform_condition:
+                    sys_condition = platform_condition.split('!=')[1].strip('"\'')
+                    if sys.platform.lower() == sys_condition.lower():
+                        continue  # 跳过不匹配平台的依赖
             else:
                 pkg_name = pkg_spec
+            
+            if '>=' in pkg_name:
+                pkg_name, req_version = pkg_name.split('>=', 1)
+                op = '>='
+            elif '==' in pkg_name:
+                pkg_name, req_version = pkg_name.split('==', 1)
+                op = '=='
+            else:
+                pkg_name = pkg_name
                 req_version = None
                 op = None
             
@@ -90,7 +104,7 @@ def check_dependencies():
                     elif op == '==' and installed_version != required_version:
                         version_mismatch.append(f"{pkg_name} (installed: {installed[pkg_name]}, required: {pkg_spec})")
             else:
-                missing.append(pkg_spec)
+                missing.append(pkg_spec.split(';')[0].strip())  # 添加不带平台条件的包名
         
         if not missing and not version_mismatch:
             print("All dependencies are satisfied ✓")
@@ -110,6 +124,7 @@ def check_dependencies():
         if missing:
             print("Attempting to install missing packages...")
             try:
+                # 安装时不带平台条件
                 subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
                 print("Installation successful ✓")
                 print("Please restart the program")
@@ -125,16 +140,23 @@ def check_dependencies():
         print(traceback.format_exc())
         return False
 
-def import_module(module_path):
-    """动态导入模块"""
+def import_module(module_name, package=None):
+    """动态导入模块，支持绝对导入"""
     try:
-        spec = importlib.util.spec_from_file_location("module", module_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = importlib.import_module(module_name, package)
         return module
-    except Exception as e:
-        print(f"Failed to import module from {module_path}: {e}")
-        return None
+    except ImportError:
+        print(f"Failed to import {module_name}, trying alternative path...")
+        try:
+            # 尝试从src目录导入
+            module_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", f"{module_name}.py")
+            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        except Exception as e:
+            print(f"Failed to import module {module_name}: {e}")
+            return None
 
 # 设置工作目录为脚本所在目录
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -148,7 +170,7 @@ sys.path.append(os.path.join(current_dir, "src"))
 if not check_dependencies():
     sys.exit(1)
 
-# 动态导入模块 - 使用绝对路径
+# 使用绝对导入方式
 try:
     from src.data_processor import (
         add_temporal_features,
@@ -163,24 +185,19 @@ try:
         send_email,
         log_error
     )
-    print("Successfully imported modules using absolute imports")
 except ImportError as e:
     print(f"Absolute import failed: {e}")
-    print("Falling back to dynamic import...")
+    print("Trying dynamic import as fallback...")
     
-    # 动态导入回退方案
-    data_processor_path = os.path.join(current_dir, "src", "data_processor.py")
-    analysis_path = os.path.join(current_dir, "src", "analysis.py")
-    utils_path = os.path.join(current_dir, "src", "utils.py")
-
-    data_processor = import_module(data_processor_path)
-    analysis = import_module(analysis_path)
-    utils = import_module(utils_path)
-
+    # 动态导入作为回退方案
+    data_processor = import_module("data_processor", "src")
+    analysis = import_module("analysis", "src")
+    utils = import_module("utils", "src")
+    
     if not all([data_processor, analysis, utils]):
         print("Critical modules missing, exiting...")
         sys.exit(1)
-
+    
     # 获取具体功能
     add_temporal_features = getattr(data_processor, 'add_temporal_features', None)
     add_lunar_features = getattr(data_processor, 'add_lunar_features', None)
