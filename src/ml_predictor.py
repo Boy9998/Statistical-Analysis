@@ -9,7 +9,7 @@ from sklearn.svm import SVC
 import warnings
 import logging
 
-# === 增强降级处理 ===
+# === 修改：XGBoost 可选导入与降级方案 ===
 try:
     from xgboost import XGBClassifier
     XGB_INSTALLED = True
@@ -49,9 +49,7 @@ class MLPredictor:
         参数:
             model_type: 模型类型，可选 'xgboost', 'randomforest', 'svm', 'gradientboosting'
         """
-        self.original_model_type = model_type
-        
-        # === 增强降级处理 ===
+        # === 修改：XGBoost 降级处理 ===
         if model_type == 'xgboost' and not XGB_INSTALLED:
             logger.warning("XGBoost 不可用，自动切换为随机森林模型")
             model_type = 'randomforest'
@@ -63,10 +61,9 @@ class MLPredictor:
         self.feature_columns = []
         self.zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
         
-        logger.info(f"初始化预测器 | 请求模型: {self.original_model_type} | 实际使用: {self.model_type}")
-        
         # 尝试加载预训练模型
         self.load_model()
+        logger.info(f"MLPredictor 初始化完成，使用模型: {model_type}")
     
     def load_model(self):
         """加载预训练的模型和预处理工具"""
@@ -76,38 +73,23 @@ class MLPredictor:
         features_path = os.path.join(ML_MODEL_PATH, 'feature_columns.txt')
         
         try:
-            # === 增强模型加载回退 ===
             if os.path.exists(model_path):
                 self.model = joblib.load(model_path)
                 logger.info(f"已加载预训练的{self.model_type}模型")
-            else:
-                logger.warning(f"模型文件不存在: {model_path}")
-                
             if os.path.exists(scaler_path):
                 self.scaler = joblib.load(scaler_path)
                 logger.info("已加载特征缩放器")
-            else:
-                logger.warning("特征缩放器不存在，将在训练时创建")
-                
             if os.path.exists(encoder_path):
                 self.label_encoder = joblib.load(encoder_path)
                 logger.info("已加载标签编码器")
-            else:
-                logger.warning("标签编码器不存在，将在训练时创建")
-                
             if os.path.exists(features_path):
                 with open(features_path, 'r') as f:
                     self.feature_columns = f.read().splitlines()
                 logger.info(f"已加载{len(self.feature_columns)}个特征列")
-            else:
-                logger.warning("特征列文件不存在，将在训练时生成")
-                
         except Exception as e:
             logger.error(f"加载模型失败: {e}")
-            # 重置模型状态确保安全回退
             self.model = None
             self.scaler = None
-            self.label_encoder = LabelEncoder()
     
     def save_model(self):
         """保存模型和预处理工具"""
@@ -245,17 +227,24 @@ class MLPredictor:
             
             X_test_scaled = self.scaler.transform(X_test)
             
-            # 初始化模型 (已移除冗余的XGB检查)
+            # 初始化模型
             if self.model_type == 'randomforest':
                 model = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=5)
+                logger.info(f"第 {fold+1} 折 - 使用随机森林模型")
             elif self.model_type == 'svm':
                 model = SVC(probability=True, random_state=42)
+                logger.info(f"第 {fold+1} 折 - 使用SVM模型")
             elif self.model_type == 'gradientboosting':
                 model = GradientBoostingClassifier(n_estimators=100, random_state=42, max_depth=3)
+                logger.info(f"第 {fold+1} 折 - 使用梯度提升模型")
             else:  # xgboost
-                model = XGBClassifier(n_estimators=100, random_state=42, max_depth=3)
-            
-            logger.info(f"第 {fold+1} 折 - 使用 {self.model_type} 模型")
+                # === 修改：XGBoost 可用性检查 ===
+                if XGB_INSTALLED:
+                    model = XGBClassifier(n_estimators=100, random_state=42, max_depth=3)
+                    logger.info(f"第 {fold+1} 折 - 使用XGBoost模型")
+                else:
+                    logger.warning(f"第 {fold+1} 折 - XGBoost 不可用，使用随机森林替代")
+                    model = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=5)
             
             # 训练模型
             model.fit(X_train_scaled, y_train)
@@ -283,17 +272,23 @@ class MLPredictor:
             self.scaler = StandardScaler()
             X_scaled = self.scaler.fit_transform(X)
         
-        # 初始化最终模型
+        # === 修改：最终模型初始化 ===
         if self.model_type == 'randomforest':
             self.model = RandomForestClassifier(n_estimators=150, random_state=42, max_depth=5)
+            logger.info("最终模型: 随机森林 (n_estimators=150)")
         elif self.model_type == 'svm':
             self.model = SVC(probability=True, random_state=42)
+            logger.info("最终模型: SVM")
         elif self.model_type == 'gradientboosting':
             self.model = GradientBoostingClassifier(n_estimators=150, random_state=42, max_depth=3)
+            logger.info("最终模型: 梯度提升 (n_estimators=150)")
         else:  # xgboost
-            self.model = XGBClassifier(n_estimators=150, random_state=42, max_depth=3)
-        
-        logger.info(f"最终模型: {self.model_type} (n_estimators=150)")
+            if XGB_INSTALLED:
+                self.model = XGBClassifier(n_estimators=150, random_state=42, max_depth=3)
+                logger.info("最终模型: XGBoost (n_estimators=150)")
+            else:
+                logger.warning("XGBoost 不可用，使用随机森林作为最终模型")
+                self.model = RandomForestClassifier(n_estimators=150, random_state=42, max_depth=5)
         
         # 训练最终模型
         self.model.fit(X_scaled, y)
