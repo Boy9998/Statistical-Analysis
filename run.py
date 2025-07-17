@@ -28,7 +28,6 @@ def check_dependencies():
     if not req_file:
         print("Warning: requirements.txt not found in project directories")
         print("Defaulting to core dependencies check...")
-        # 核心必需依赖列表
         core_dependencies = [
             'pandas>=2.0.3',
             'numpy>=1.24.4',
@@ -65,7 +64,6 @@ def check_dependencies():
         version_mismatch = []
         
         for pkg_spec in required_packages:
-            # 处理各种格式的包声明
             if '>=' in pkg_spec:
                 pkg_name, req_version = pkg_spec.split('>=', 1)
                 op = '>='
@@ -126,6 +124,17 @@ def check_dependencies():
         print(traceback.format_exc())
         return False
 
+def import_module(module_path):
+    """动态导入模块"""
+    try:
+        spec = importlib.util.spec_from_file_location("module", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception as e:
+        print(f"Failed to import module from {module_path}: {e}")
+        return None
+
 # 设置工作目录为脚本所在目录
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -139,17 +148,13 @@ if not check_dependencies():
     sys.exit(1)
 
 # 动态导入模块
-def import_module(module_name, package=None):
-    try:
-        return __import__(module_name, fromlist=['*'])
-    except ImportError as e:
-        print(f"Import failed for {module_name}: {e}")
-        return None
+data_processor_path = os.path.join(current_dir, "src", "data_processor.py")
+analysis_path = os.path.join(current_dir, "src", "analysis.py")
+utils_path = os.path.join(current_dir, "src", "utils.py")
 
-# 尝试导入模块
-data_processor = import_module('data_processor', 'src') or import_module('src.data_processor')
-analysis = import_module('analysis', 'src') or import_module('src.analysis')
-utils = import_module('utils', 'src') or import_module('src.utils')
+data_processor = import_module(data_processor_path)
+analysis = import_module(analysis_path)
+utils = import_module(utils_path)
 
 if not all([data_processor, analysis, utils]):
     print("Critical modules missing, exiting...")
