@@ -1,5 +1,3 @@
-[file name]: src/ml_predictor.py
-[file content begin]
 import pandas as pd
 import numpy as np
 import joblib
@@ -446,4 +444,3 @@ if __name__ == "__main__":
             # 预测
             prediction = predictor.predict(features)
             print(f"预测结果: {prediction}")
-[file content end]
