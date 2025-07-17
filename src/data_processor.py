@@ -85,6 +85,8 @@ def add_festival_features(df):
         return "无"
     
     df['festival'] = df['date'].apply(detect_festival)
+    # 新增: 节日标志特征
+    df['is_festival'] = df['festival'].apply(lambda x: 1 if x != "无" else 0)
     print(f"已添加节日特征")
     return df
 
@@ -116,6 +118,12 @@ def add_rolling_features(df):
     
     # 创建生肖虚拟变量
     zodiac_dummies = pd.get_dummies(df['zodiac'])
+    
+    # 确保所有生肖列都存在
+    all_zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
+    for zodiac in all_zodiacs:
+        if zodiac not in zodiac_dummies.columns:
+            zodiac_dummies[zodiac] = 0
     
     # 计算滚动频率
     rolling_features = {}
