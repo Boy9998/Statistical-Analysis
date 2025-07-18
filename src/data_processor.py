@@ -1,7 +1,19 @@
+[file name]: src/data_processor.py
+[file content begin]
 import pandas as pd
 import numpy as np
 from lunarcalendar import Converter, Solar
 from datetime import datetime
+import hashlib
+import json
+import os
+from config import ML_MODEL_PATH
+
+# 确保模型目录存在
+os.makedirs(ML_MODEL_PATH, exist_ok=True)
+
+# 定义固定的生肖列表（确保特征维度稳定）
+FIXED_ZODIACS = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
 
 def preprocess_data(df):
     """数据预处理函数 - 确保日期格式正确"""
@@ -85,8 +97,6 @@ def add_festival_features(df):
         return "无"
     
     df['festival'] = df['date'].apply(detect_festival)
-    # 新增: 节日标志特征
-    df['is_festival'] = df['festival'].apply(lambda x: 1 if x != "无" else 0)
     print(f"已添加节日特征")
     return df
 
@@ -105,9 +115,57 @@ def add_season_features(df):
     print(f"已添加季节特征")
     return df
 
+def create_fixed_rolling_features(df, window_size):
+    """
+    创建固定维度的滚动窗口特征
+    确保无论数据量多少，都生成相同维度的特征
+    """
+    # 创建固定维度的DataFrame模板
+    template = pd.DataFrame(columns=[
+        f'rolling_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS
+    ] + [
+        f'heat_index_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS
+    ])
+    
+    # 如果数据为空，直接返回模板
+    if df.empty:
+        return template
+    
+    # 创建生肖虚拟变量（只包含固定生肖）
+    zodiac_dummies = pd.get_dummies(df['zodiac'])
+    for zodiac in FIXED_ZODIACS:
+        if zodiac not in zodiac_dummies.columns:
+            zodiac_dummies[zodiac] = 0
+    
+    # 确保只保留固定生肖列
+    zodiac_dummies = zodiac_dummies[FIXED_ZODIACS]
+    
+    # 计算滚动频率
+    rolling = zodiac_dummies.rolling(window=window_size, min_periods=1).mean()
+    rolling.columns = [f'rolling_{window_size}d_{zodiac}' for zodiac in rolling.columns]
+    
+    # 计算长期平均频率
+    long_term_avg = zodiac_dummies.expanding().mean()
+    
+    # 计算热度指数
+    heat_index = rolling / long_term_avg
+    heat_index = heat_index.replace([np.inf, -np.inf], 0)
+    heat_index.columns = [f'heat_index_{window_size}d_{zodiac}' for zodiac in heat_index.columns]
+    
+    # 合并特征
+    result = pd.concat([rolling, heat_index], axis=1)
+    
+    # 确保包含所有固定特征列
+    for col in template.columns:
+        if col not in result.columns:
+            result[col] = 0.0
+    
+    # 只保留固定列顺序
+    return result[template.columns]
+
 def add_rolling_features(df):
     """
-    添加滚动窗口统计特征
+    添加滚动窗口统计特征（稳定性增强版）
     包括7天、30天、100天滚动频率和热度指数
     """
     if df.empty:
@@ -116,53 +174,53 @@ def add_rolling_features(df):
     print("添加滚动窗口统计特征...")
     df = df.sort_values('date')
     
-    # 创建生肖虚拟变量
-    zodiac_dummies = pd.get_dummies(df['zodiac'])
-    
-    # 确保所有生肖列都存在
-    all_zodiacs = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
-    for zodiac in all_zodiacs:
-        if zodiac not in zodiac_dummies.columns:
-            zodiac_dummies[zodiac] = 0
-    
-    # 计算滚动频率
-    rolling_features = {}
-    for window in [7, 30, 100]:
-        rolling = zodiac_dummies.rolling(window=window, min_periods=1).mean()
-        rolling.columns = [f'rolling_{window}d_{zodiac}' for zodiac in rolling.columns]
-        rolling_features[window] = rolling
-    
-    # 计算长期平均频率
-    long_term_avg = zodiac_dummies.expanding().mean()
-    
-    # 计算热度指数
-    heat_index_features = {}
-    for window in [7, 30, 100]:
-        heat_index = rolling_features[window] / long_term_avg
-        heat_index.columns = [f'heat_index_{window}d_{zodiac}' for zodiac in heat_index.columns]
-        heat_index_features[window] = heat_index
+    # 为每个窗口创建固定维度的特征
+    rolling_7d = create_fixed_rolling_features(df, 7)
+    rolling_30d = create_fixed_rolling_features(df, 30)
+    rolling_100d = create_fixed_rolling_features(df, 100)
     
     # 合并所有特征
-    all_rolling = pd.concat([
-        pd.concat(rolling_features.values(), axis=1),
-        pd.concat(heat_index_features.values(), axis=1)
-    ], axis=1)
-    
-    # 替换无穷大值为0
-    all_rolling = all_rolling.replace([np.inf, -np.inf], 0)
+    all_rolling = pd.concat([rolling_7d, rolling_30d, rolling_100d], axis=1)
     
     # 合并到原始数据
     df = pd.concat([df, all_rolling], axis=1)
-    print(f"已添加滚动窗口统计特征: {len(all_rolling.columns)}个新特征")
+    
+    # 生成特征签名
+    generate_feature_signature(df)
+    
+    print(f"已添加滚动窗口统计特征: {len(all_rolling.columns)}个特征")
     return df
 
+def generate_feature_signature(df):
+    """生成特征签名并保存到文件"""
+    # 创建特征签名
+    feature_signature = {
+        'columns': sorted(df.columns.tolist()),
+        'dtypes': {col: str(df[col].dtype) for col in df.columns},
+        'shape': (len(df.columns),),
+        'hash': hashlib.sha256(','.join(sorted(df.columns)).hexdigest(),
+        'created_at': pd.Timestamp.now().isoformat()
+    }
+    
+    # 保存到文件
+    signature_path = os.path.join(ML_MODEL_PATH, 'feature_signature.json')
+    with open(signature_path, 'w') as f:
+        json.dump(feature_signature, f, indent=2)
+    
+    print(f"特征签名已生成并保存: {signature_path}")
+
 def add_all_features(df):
-    """一次性添加所有特征"""
+    """一次性添加所有特征（稳定性增强版）"""
+    # 固定特征添加顺序
     df = add_temporal_features(df)
     df = add_lunar_features(df)
     df = add_festival_features(df)
     df = add_season_features(df)
-    df = add_rolling_features(df)
+    df = add_rolling_features(df)  # 最后添加滚动特征
+    
+    # 确保只包含固定生肖
+    df = df[df['zodiac'].isin(FIXED_ZODIACS)]
+    
     return df
 
 # 测试函数
@@ -195,4 +253,9 @@ if __name__ == "__main__":
     else:
         print("\n所有滚动特征添加成功")
     
+    # 验证特征维度
+    feature_count = len(test_df.columns)
+    print(f"\n特征总数: {feature_count}")
+    
     print("\n===== 测试完成 =====")
+[file content end]
