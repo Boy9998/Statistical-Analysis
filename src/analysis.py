@@ -53,7 +53,9 @@ class LotteryAnalyzer:
             print("添加农历和节日信息...")
             self.df['lunar'] = self.df['date'].apply(self.get_lunar_date)
             self.df['festival'] = self.df['date'].apply(self.detect_festival)
-            # 移除此处的 is_festival 创建，它将在特征工程中添加
+            # 确保 is_festival 列存在
+            if 'is_festival' not in self.df.columns:
+                self.df['is_festival'] = (self.df['festival'] != "无").astype(int)
             self.df['season'] = self.df['date'].apply(self.get_season)
             
             # 添加时序特征
@@ -111,29 +113,29 @@ class LotteryAnalyzer:
         
         # 计算每个季节中每个生肖的频率
         for season in ['春', '夏', '秋', '冬']:
-            season_data = self.df[self.df['season'] == season]
+            # 使用 .loc 进行显式行选择（关键修复）
+            season_mask = (self.df['season'] == season)
+            season_data = self.df.loc[season_mask]
             if not season_data.empty:
                 season_counts = season_data['zodiac'].value_counts(normalize=True)
                 for zodiac in self.zodiacs:
                     # 更新季节特征值
-                    self.df.loc[self.df['season'] == season, f'season_{zodiac}'] = season_counts.get(zodiac, 0.0)
+                    self.df.loc[season_mask, f'season_{zodiac}'] = season_counts.get(zodiac, 0.0)
         
         # 3. 节日生肖特征
-        # 确保 is_festival 列存在
-        if 'is_festival' not in self.df.columns:
-            self.df['is_festival'] = self.df['festival'] != "无"
-        
         for zodiac in self.zodiacs:
             # 为每个生肖创建节日特征列
             self.df[f'festival_{zodiac}'] = 0.0
         
         # 计算节日中每个生肖的频率
-        festival_data = self.df[self.df['is_festival']]
+        # 使用 .loc 进行显式行选择（关键修复）
+        festival_mask = (self.df['is_festival'] == 1)
+        festival_data = self.df.loc[festival_mask]
         if not festival_data.empty:
             festival_counts = festival_data['zodiac'].value_counts(normalize=True)
             for zodiac in self.zodiacs:
                 # 更新节日特征值
-                self.df.loc[self.df['is_festival'], f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
+                self.df.loc[festival_mask, f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
         
         print(f"已添加生肖特征: {len(self.zodiacs)*3}个新特征")
     
@@ -232,7 +234,7 @@ class LotteryAnalyzer:
         
         # 确保 is_festival 列存在
         if 'is_festival' not in self.df.columns:
-            self.df['is_festival'] = self.df['festival'] != "无"
+            self.df['is_festival'] = (self.df['festival'] != "无").astype(int)
         
         # 1. 连续出现模式
         consecutive_count = 1
@@ -272,7 +274,7 @@ class LotteryAnalyzer:
         total_festivals = 0
         
         for idx, row in self.df.iterrows():
-            if row['is_festival']:
+            if row['is_festival'] == 1:  # 显式检查
                 festival = row['festival']
                 festival_zodiacs[festival][row['zodiac']] += 1
                 total_festivals += 1
@@ -714,7 +716,7 @@ class LotteryAnalyzer:
         """为数据添加必要的特征 - 完整实现"""
         # 确保 is_festival 列存在
         if 'is_festival' not in df.columns and 'festival' in df.columns:
-            df['is_festival'] = df['festival'] != "无"
+            df['is_festival'] = (df['festival'] != "无").astype(int)
         
         # 1. 添加生肖频率特征
         zodiac_counts = df['zodiac'].value_counts(normalize=True)
@@ -728,12 +730,14 @@ class LotteryAnalyzer:
         
         # 计算每个季节中每个生肖的频率
         for season in ['春', '夏', '秋', '冬']:
-            season_data = df[df['season'] == season]
+            # 使用 .loc 进行显式行选择（关键修复）
+            season_mask = (df['season'] == season)
+            season_data = df.loc[season_mask]
             if not season_data.empty:
                 season_counts = season_data['zodiac'].value_counts(normalize=True)
                 for zodiac in self.zodiacs:
                     # 更新季节特征值
-                    df.loc[df['season'] == season, f'season_{zodiac}'] = season_counts.get(zodiac, 0.0)
+                    df.loc[season_mask, f'season_{zodiac}'] = season_counts.get(zodiac, 0.0)
         
         # 3. 添加节日生肖特征
         for zodiac in self.zodiacs:
@@ -741,12 +745,14 @@ class LotteryAnalyzer:
             df[f'festival_{zodiac}'] = 0.0
         
         # 计算节日中每个生肖的频率
-        festival_data = df[df['is_festival']]
+        # 使用 .loc 进行显式行选择（关键修复）
+        festival_mask = (df['is_festival'] == 1)
+        festival_data = df.loc[festival_mask]
         if not festival_data.empty:
             festival_counts = festival_data['zodiac'].value_counts(normalize=True)
             for zodiac in self.zodiacs:
                 # 更新节日特征值
-                df.loc[df['is_festival'], f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
+                df.loc[festival_mask, f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
     
     def apply_pattern_enhancement(self, prediction, last_zodiac, target_date, data):
         """应用历史模式增强预测 - 强化节日效应和连续/间隔处理"""
