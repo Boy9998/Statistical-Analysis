@@ -1,5 +1,3 @@
-[file name]: src/data_processor.py
-[file content begin]
 import pandas as pd
 import numpy as np
 from lunarcalendar import Converter, Solar
