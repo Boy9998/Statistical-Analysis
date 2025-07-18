@@ -199,6 +199,20 @@ class StrategyManager:
     
     def evaluate_factor_validity(self, df, window=100):
         """回测验证因子有效性 - 增强版"""
+        # 添加特征存在性检查
+        required_columns = ['zodiac', 'season', 'is_festival']
+        for col in required_columns:
+            if col not in df.columns:
+                print(f"警告: 数据中缺失特征列 '{col}'，使用默认值")
+                if col == 'is_festival':
+                    df[col] = 0  # 默认非节日
+                elif col == 'season':
+                    df[col] = '未知'  # 默认季节未知
+                elif col == 'zodiac':
+                    # 如果缺少生肖列，无法继续验证
+                    print("错误: 数据中缺少生肖列，无法进行因子有效性验证")
+                    return {}
+        
         if len(df) < window:
             print(f"数据不足{window}期，无法进行因子有效性验证")
             return {}
@@ -216,20 +230,12 @@ class StrategyManager:
         factor_scores['transition'] = trans_acc
         
         # 3. 季节因子验证
-        if 'season' in recent.columns:
-            season_acc = self._validate_season_factor(recent)
-            factor_scores['season'] = season_acc
-        else:
-            print("警告: 数据中缺少'season'列，跳过季节因子验证")
-            factor_scores['season'] = 0.0
+        season_acc = self._validate_season_factor(recent)
+        factor_scores['season'] = season_acc
         
         # 4. 节日因子验证
-        if 'is_festival' in recent.columns:
-            festival_acc = self._validate_festival_factor(recent)
-            factor_scores['festival'] = festival_acc
-        else:
-            print("警告: 数据中缺少'is_festival'列，跳过节日因子验证")
-            factor_scores['festival'] = 0.0
+        festival_acc = self._validate_festival_factor(recent)
+        factor_scores['festival'] = festival_acc
         
         # 5. 滚动窗口因子验证 - 更新为7天、30天和100天
         rolling_acc = self._validate_rolling_factor(recent)
@@ -360,7 +366,12 @@ class StrategyManager:
         return accuracy_score(actuals, predictions) if predictions else 0
     
     def _validate_festival_factor(self, df):
-        """验证节日因子有效性"""
+        """安全验证节日因子有效性"""
+        # 确保节日特征存在
+        if 'is_festival' not in df.columns:
+            print("警告: 数据中缺少节日特征列，使用默认值")
+            df['is_festival'] = 0
+        
         predictions = []
         actuals = []
         
@@ -368,7 +379,7 @@ class StrategyManager:
             # 检查是否是节日
             if df['is_festival'].iloc[i]:
                 # 使用节日历史数据
-                festival_data = df[df['is_festival']].iloc[:i]
+                festival_data = df[df['is_festival'] == 1].iloc[:i]
                 
                 if not festival_data.empty:
                     # 预测节日出现频率最高的生肖
@@ -500,297 +511,6 @@ class StrategyManager:
         # 计算每个因子的特征重要性总和
         factor_imp = defaultdict(float)
         for feature, imp in self.feature_importance.items():
-            for prefix, factor in feature_to_factor.items():
-                if feature.startswith(prefix):
-                    factor_imp[factor] += imp
-                    break
-        
-        # 归一化因子重要性
-        total_imp = sum(factor_imp.values())
-        if total_imp > 0:
-            for factor in factor_imp:
-                factor_imp[factor] /= total_imp
-            
-            # 更新权重
-            for factor, imp in factor_imp.items():
-                if factor in self.weights:
-                    # 特征重要性占权重调整的80%
-                    self.weights[factor] = 0.8 * imp + 0.2 * self.weights[factor]
-        
-        print(f"基于特征重要性更新权重: {self.weights}")
-    
-    def update_combo_probs(self, df, window=100):
-        """更新生肖组合概率 - 修复SettingWithCopyWarning"""
-        if len(df) < window:
-            print(f"数据不足{window}期，无法计算组合概率")
-            return
-        
-        # 使用最近window期数据 - 创建副本避免警告
-        recent = df.iloc[-window:].copy()
-        
-        # 创建组合列：上期生肖-本期生肖
-        recent.loc[:, 'combo'] = recent['zodiac'].shift() + '-' + recent['zodiac']
-        
-        # 删除NaN值
-        recent = recent.dropna(subset=['combo'])
-        
-        # 计算组合概率
-        combo_counts = recent['combo'].value_counts(normalize=True)
-        self.combo_probs = combo_counts.to_dict()
-        
-        print(f"已更新生肖组合概率 (基于最近{window}期数据)")
-        # 避免f-string嵌套问题
-        top5_combos = list(combo_counts.head(5).items())
-        print(f"前5个常见组合: {top5_combos}")
-    
-    def get_combo_prediction(self, last_zodiac, top_n=5):
-        """获取基于组合概率的预测"""
-        # 过滤以last_zodiac开头的组合
-        relevant_combos = {combo: prob for combo, prob in self.combo_probs.items() 
-                          if combo.startswith(f"{last_zodiac}-")}
-        
-        if not relevant_combos:
-            return []
-        
-        # 按概率排序
-        sorted_combos = sorted(relevant_combos.items(), key=lambda x: x[1], reverse=True)
-        
-        # 提取预测生肖（组合的后半部分）
-        predictions = [combo.split('-')[1] for combo, _ in sorted_combos[:top_n]]
-        return predictions
-    
-    def generate_factor_report(self):
-        """生成因子表现报告"""
-        report = "===== 因子表现报告 =====\n"
-        
-        # 当前权重
-        report += "\n当前权重分配:\n"
-        for factor, weight in self.weights.items():
-            report += f"- {factor}: {weight:.3f}\n"
-        
-        # 因子历史表现
-        report += "\n历史准确率 (最近5次平均):\n"
-        for factor, acc_history in self.factor_performance.items():
-            if acc_history:
-                avg_acc = np.mean(acc_history[-5:])  # 最近5次平均
-                report += f"- {factor}: {avg_acc:.2%}\n"
-        
-        # 特征重要性
-        if self.feature_importance is not None:
-            report += "\n特征重要性 (Top 5):\n"
-            for feature, imp in self.feature_importance.head(5).items():
-                report += f"- {feature}: {imp:.4f}\n"
-        
-        # 组合概率
-        if self.combo_probs:
-            report += "\n常见生肖组合 (Top 5):\n"
-            sorted_combos = sorted(self.combo_probs.items(), key=lambda x: x[1], reverse=True)
-            for combo, prob in sorted_combos[:5]:
-                report += f"- {combo}: {prob:.2%}\n"
-        
-        # 因子有效性
-        if self.factor_validity:
-            report += "\n因子有效性评分 (0-1):\n"
-            for factor, validity in self.factor_validity.items():
-                report += f"- {factor}: {validity:.4f}\n"
-        
-        # 特殊关注模式
-        if self.special_attention_patterns:
-            report += "\n特殊关注模式 (Top 3):\n"
-            sorted_patterns = sorted(self.special_attention_patterns.items(), 
-                                   key=lambda x: x[1]['error_count'], reverse=True)
-            for pattern, info in sorted_patterns[:3]:
-                report += f"- {pattern}: 错误次数={info['error_count']}, 权重倍数={info['weight_multiplier']:.2f}\n"
-        
-        return report
-    
-    def generate_prediction(self, features, last_zodiac):
-        """生成多因子综合预测 - 集成错误学习"""
-        # 1. 频率因子预测
-        freq_pred = self._frequency_prediction(features)
-        
-        # 2. 转移概率预测
-        trans_pred = self._transition_prediction(last_zodiac)
-        
-        # 3. 季节因子预测
-        season_pred = self._season_prediction(features)
-        
-        # 4. 节日因子预测
-        festival_pred = self._festival_prediction(features)
-        
-        # 5. 滚动窗口预测 - 更新为7天、30天和100天
-        rolling_pred = self._rolling_prediction(features)
-        
-        # 6. 组合概率预测
-        combo_pred = self.get_combo_prediction(last_zodiac, top_n=5)
-        
-        # 7. 特征重要性加权预测
-        imp_pred = self._importance_weighted_prediction(features)
-        
-        # 8. ML模型预测
-        ml_pred = self._ml_model_prediction(features)
-        
-        # 组合所有预测
-        all_predictions = {
-            'frequency': freq_pred,
-            'transition': trans_pred,
-            'season': season_pred,
-            'festival': festival_pred,
-            'rolling_7d': rolling_pred.get('7d', []),  # 修复：使用d取代p
-            'rolling_30d': rolling_pred.get('30d', []), # 修复：使用d取代p
-            'rolling_100d': rolling_pred.get('100d', []), # 新增100天滚动特征
-            'combo': combo_pred,
-            'feature_imp': imp_pred,
-            'ml_model': ml_pred  # 新增ML模型预测
-        }
-        
-        # 加权融合预测
-        final_prediction = self._fuse_predictions(all_predictions)
-        
-        # 应用特殊关注模式增强
-        final_prediction = self._apply_special_attention(final_prediction, last_zodiac)
-        
-        return final_prediction, all_predictions
-    
-    def _ml_model_prediction(self, features):
-        """使用ML模型进行预测"""
-        if not self.ml_model:
-            return []
-            
-        try:
-            # 准备特征数据
-            X = pd.DataFrame([features])
-            # 只保留数值型特征
-            X = X.select_dtypes(include=['number'])
-            
-            # 预测
-            prediction_proba = self.ml_model.predict_proba(X)[0]
-            zodiac_indices = np.argsort(prediction_proba)[::-1][:3]  # 取概率最高的3个
-            
-            # 解码生肖
-            zodiacs = self.zodiacs
-            predictions = [zodiacs[i] for i in zodiac_indices]
-            return predictions
-            
-        except Exception as e:
-            print(f"ML模型预测失败: {e}")
-            return []
-    
-    def _apply_special_attention(self, prediction, last_zodiac):
-        """应用特殊关注模式增强预测"""
-        # 检查是否有针对当前上期生肖的特殊关注模式
-        special_pattern = f"{last_zodiac}-"
-        for pattern, info in self.special_attention_patterns.items():
-            if pattern.startswith(special_pattern):
-                zodiac_to_boost = pattern.split('-')[1]
-                if zodiac_to_boost not in prediction:
-                    # 如果这个生肖不在预测中，替换掉得分最低的生肖
-                    prediction = prediction[:-1] + [zodiac_to_boost]
-                    print(f"特殊关注增强: 根据历史错误模式，增加 {zodiac_to_boost} 的优先级")
-                    break
-        return prediction
-    
-    def _frequency_prediction(self, features):
-        """基于频率的预测"""
-        # 获取各生肖频率特征
-        zodiac_freq = {z: features[f'freq_{z}'] for z in self.zodiacs if f'freq_{z}' in features}
-        if not zodiac_freq:
-            return []
-        sorted_zodiac = sorted(zodiac_freq.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:3]]
-    
-    def _transition_prediction(self, last_zodiac):
-        """基于转移概率的预测"""
-        if not self.combo_probs:
-            return []
-        
-        # 获取各生肖转移概率
-        trans_probs = {z: self.combo_probs.get(f"{last_zodiac}-{z}", 0) for z in self.zodiacs}
-        sorted_zodiac = sorted(trans_probs.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:3]]
-    
-    def _season_prediction(self, features):
-        """基于季节的预测"""
-        # 获取季节特征
-        season_probs = {z: features[f'season_{z}'] for z in self.zodiacs if f'season_{z}' in features}
-        if not season_probs:
-            return []
-        sorted_zodiac = sorted(season_probs.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:2]]
-    
-    def _festival_prediction(self, features):
-        """基于节日的预测"""
-        # 检查是否是节日
-        if not features.get('is_festival', False):
-            return []
-        
-        # 获取节日特征
-        festival_probs = {z: features[f'festival_{z}'] for z in self.zodiacs if f'festival_{z}' in features}
-        if not festival_probs:
-            return []
-        sorted_zodiac = sorted(festival_probs.items(), key=lambda x: x[1], reverse=True)
-        return [z for z, _ in sorted_zodiac[:2]]
-    
-    def _rolling_prediction(self, features):
-        """基于滚动窗口的预测 - 更新为7天、30天和100天"""
-        # 7天滚动窗口
-        rolling_7d = {}
-        for z in self.zodiacs:
-            feature_name = f'rolling_7d_{z}'  # 修复：使用d取代p
-            if feature_name in features:
-                # 确保值是标量而非Series
-                value = features[feature_name]
-                if isinstance(value, pd.Series):
-                    # 取最后一个值
-                    value = value.iloc[-1] if not value.empty else 0
-                rolling_7d[z] = value
-        
-        sorted_7d = sorted(rolling_7d.items(), key=lambda x: x[1], reverse=True)
-        pred_7d = [z for z, _ in sorted_7d[:2]] if sorted_7d else []
-        
-        # 30天滚动窗口
-        rolling_30d = {}
-        for z in self.zodiacs:
-            feature_name = f'rolling_30d_{z}'  # 修复：使用d取代p
-            if feature_name in features:
-                # 确保值是标量而非Series
-                value = features[feature_name]
-                if isinstance(value, pd.Series):
-                    # 取最后一个值
-                    value = value.iloc[-1] if not value.empty else 0
-                rolling_30d[z] = value
-        
-        sorted_30d = sorted(rolling_30d.items(), key=lambda x: x[1], reverse=True)
-        pred_30d = [z for z, _ in sorted_30d[:2]] if sorted_30d else []
-        
-        # 100天滚动窗口
-        rolling_100d = {}
-        for z in self.zodiacs:
-            feature_name = f'rolling_100d_{z}'  # 新增100天滚动特征
-            if feature_name in features:
-                # 确保值是标量而非Series
-                value = features[feature_name]
-                if isinstance(value, pd.Series):
-                    # 取最后一个值
-                    value = value.iloc[-1] if not value.empty else 0
-                rolling_100d[z] = value
-        
-        sorted_100d = sorted(rolling_100d.items(), key=lambda x: x[1], reverse=True)
-        pred_100d = [z for z, _ in sorted_100d[:2]] if sorted_100d else []
-        
-        return {'7d': pred_7d, '30d': pred_30d, '100d': pred_100d}
-    
-    def _importance_weighted_prediction(self, features):
-        """基于特征重要性的预测"""
-        if self.feature_importance is None:
-            return []
-        
-        # 只考虑前10个重要特征
-        top_features = self.feature_importance.head(10)
-        feature_scores = defaultdict(float)
-        
-        # 计算每个生肖的特征加权得分
-        for feature, imp in top_features.items():
             # 解析特征对应的生肖
             if '_' in feature:
                 zodiac = feature.split('_')[-1]
