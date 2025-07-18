@@ -578,4 +578,3 @@ if __name__ == "__main__":
             # 预测
             prediction = predictor.predict(features)
             print(f"预测结果: {prediction}")
-[file content end]
