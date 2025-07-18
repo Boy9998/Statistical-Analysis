@@ -5,6 +5,7 @@ import joblib
 import os
 from sklearn.metrics import accuracy_score
 from datetime import datetime
+import warnings
 
 # 导入ML_MODEL_PATH配置
 try:
@@ -27,8 +28,9 @@ class StrategyManager:
             'transition': 0.12,    # 转移概率 (原0.15)
             'season': 0.08,        # 季节 (原0.10)
             'festival': 0.08,      # 节日 (原0.10)
-            'rolling_7p': 0.12,    # 7期滚动特征 (原0.15)
-            'rolling_30p': 0.08,   # 30期滚动特征 (原0.10)
+            'rolling_7d': 0.12,    # 7天滚动特征 (原0.15) - 修复：d取代p
+            'rolling_30d': 0.08,   # 30天滚动特征 (原0.10) - 修复：d取代p
+            'rolling_100d': 0.08,  # 新增100天滚动特征
             'combo': 0.12,         # 生肖组合概率 (原0.15)
             'feature_imp': 0.08,   # 特征重要性 (原0.10)
             'ml_model': 0.20      # 新增ML模型权重
@@ -127,7 +129,7 @@ class StrategyManager:
             self.weights['ml_model'] = min(0.40, self.weights['ml_model'] + adjustment_factor)
             
             # 降低其他权重
-            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7p', 'rolling_30p', 'combo', 'feature_imp']:
+            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7d', 'rolling_30d', 'rolling_100d', 'combo', 'feature_imp']:
                 self.weights[factor] = max(0.05, self.weights[factor] - (adjustment_factor * 0.5))
             
             print(f"准确率调整: 准确率低 ({accuracy:.2%})，大幅增加ML模型权重(+{adjustment_factor:.3f})")
@@ -139,8 +141,9 @@ class StrategyManager:
             adjustment_factor = min(0.2, 0.10 + (accuracy_surplus * 1.0))
             
             # 增加滚动窗口权重
-            self.weights['rolling_7p'] = min(0.30, self.weights['rolling_7p'] + adjustment_factor)
-            self.weights['rolling_30p'] = min(0.25, self.weights['rolling_30p'] + adjustment_factor)
+            self.weights['rolling_7d'] = min(0.30, self.weights['rolling_7d'] + adjustment_factor)
+            self.weights['rolling_30d'] = min(0.25, self.weights['rolling_30d'] + adjustment_factor)
+            self.weights['rolling_100d'] = min(0.20, self.weights['rolling_100d'] + adjustment_factor)
             
             # 降低其他权重
             for factor in ['frequency', 'transition', 'season', 'festival', 'combo', 'feature_imp', 'ml_model']:
@@ -170,7 +173,7 @@ class StrategyManager:
             self.weights['ml_model'] = min(0.45, self.weights['ml_model'] + emergency_adjust)
             
             # 重置其他权重
-            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7p', 'rolling_30p', 'combo', 'feature_imp']:
+            for factor in ['frequency', 'transition', 'season', 'festival', 'rolling_7d', 'rolling_30d', 'rolling_100d', 'combo', 'feature_imp']:
                 self.weights[factor] = max(0.05, self.weights[factor] * 0.7)  # 降低30%
             
             print(f"紧急优化: 连续3次准确率<55%，大幅增加ML模型权重(+{emergency_adjust:.3f})")
@@ -228,10 +231,11 @@ class StrategyManager:
             print("警告: 数据中缺少'is_festival'列，跳过节日因子验证")
             factor_scores['festival'] = 0.0
         
-        # 5. 滚动窗口因子验证 - 更新为7期和30期
+        # 5. 滚动窗口因子验证 - 更新为7天、30天和100天
         rolling_acc = self._validate_rolling_factor(recent)
-        factor_scores['rolling_7p'] = rolling_acc.get('rolling_7p', 0)
-        factor_scores['rolling_30p'] = rolling_acc.get('rolling_30p', 0)
+        factor_scores['rolling_7d'] = rolling_acc.get('rolling_7d', 0)
+        factor_scores['rolling_30d'] = rolling_acc.get('rolling_30d', 0)
+        factor_scores['rolling_100d'] = rolling_acc.get('rolling_100d', 0)
         
         # 6. 组合概率因子验证
         combo_acc = self._validate_combo_factor(recent)
@@ -377,35 +381,43 @@ class StrategyManager:
         return accuracy_score(actuals, predictions) if predictions else 0
     
     def _validate_rolling_factor(self, df):
-        """验证滚动窗口因子有效性 - 更新为7期和30期"""
-        predictions_7p = []
-        predictions_30p = []
+        """验证滚动窗口因子有效性 - 更新为7天、30天和100天"""
+        # 至少需要100天数据
+        if len(df) < 100:
+            return {'rolling_7d': 0, 'rolling_30d': 0, 'rolling_100d': 0}
+        
+        predictions_7d = []
+        predictions_30d = []
+        predictions_100d = []
         actuals = []
         
-        # 至少需要30期数据
-        if len(df) < 30:
-            return {'rolling_7p': 0, 'rolling_30p': 0}
-        
-        for i in range(30, len(df)):
-            # 7期滚动窗口
-            rolling_7p = df.iloc[i-7:i]
-            freq_7p = rolling_7p['zodiac'].value_counts(normalize=True)
-            pred_7p = freq_7p.idxmax() if not freq_7p.empty else None
+        for i in range(100, len(df)):
+            # 7天滚动窗口
+            rolling_7d = df.iloc[i-7:i]
+            freq_7d = rolling_7d['zodiac'].value_counts(normalize=True)
+            pred_7d = freq_7d.idxmax() if not freq_7d.empty else None
             
-            # 30期滚动窗口
-            rolling_30p = df.iloc[i-30:i]
-            freq_30p = rolling_30p['zodiac'].value_counts(normalize=True)
-            pred_30p = freq_30p.idxmax() if not freq_30p.empty else None
+            # 30天滚动窗口
+            rolling_30d = df.iloc[i-30:i]
+            freq_30d = rolling_30d['zodiac'].value_counts(normalize=True)
+            pred_30d = freq_30d.idxmax() if not freq_30d.empty else None
             
-            if pred_7p and pred_30p:
-                predictions_7p.append(pred_7p)
-                predictions_30p.append(pred_30p)
+            # 100天滚动窗口
+            rolling_100d = df.iloc[i-100:i]
+            freq_100d = rolling_100d['zodiac'].value_counts(normalize=True)
+            pred_100d = freq_100d.idxmax() if not freq_100d.empty else None
+            
+            if pred_7d and pred_30d and pred_100d:
+                predictions_7d.append(pred_7d)
+                predictions_30d.append(pred_30d)
+                predictions_100d.append(pred_100d)
                 actuals.append(df['zodiac'].iloc[i])
         
-        acc_7p = accuracy_score(actuals, predictions_7p) if predictions_7p else 0
-        acc_30p = accuracy_score(actuals, predictions_30p) if predictions_30p else 0
+        acc_7d = accuracy_score(actuals, predictions_7d) if predictions_7d else 0
+        acc_30d = accuracy_score(actuals, predictions_30d) if predictions_30d else 0
+        acc_100d = accuracy_score(actuals, predictions_100d) if predictions_100d else 0
         
-        return {'rolling_7p': acc_7p, 'rolling_30p': acc_30p}
+        return {'rolling_7d': acc_7d, 'rolling_30d': acc_30d, 'rolling_100d': acc_100d}
     
     def _validate_combo_factor(self, df):
         """验证组合概率因子有效性"""
@@ -478,8 +490,9 @@ class StrategyManager:
             'trans_': 'transition',
             'season_': 'season',
             'festival_': 'festival',
-            'rolling_7p_': 'rolling_7p',  # 更新为7期
-            'rolling_30p_': 'rolling_30p', # 更新为30期
+            'rolling_7d_': 'rolling_7d',  # 修复：使用d取代p
+            'rolling_30d_': 'rolling_30d', # 修复：使用d取代p
+            'rolling_100d_': 'rolling_100d', # 新增100天滚动特征
             'combo_': 'combo',
             'ml_feat_': 'ml_model'  # 新增ML特征映射
         }
@@ -605,7 +618,7 @@ class StrategyManager:
         # 4. 节日因子预测
         festival_pred = self._festival_prediction(features)
         
-        # 5. 滚动窗口预测 - 更新为7期和30期
+        # 5. 滚动窗口预测 - 更新为7天、30天和100天
         rolling_pred = self._rolling_prediction(features)
         
         # 6. 组合概率预测
@@ -623,8 +636,9 @@ class StrategyManager:
             'transition': trans_pred,
             'season': season_pred,
             'festival': festival_pred,
-            'rolling_7p': rolling_pred.get('7p', []),  # 更新为7期
-            'rolling_30p': rolling_pred.get('30p', []), # 更新为30期
+            'rolling_7d': rolling_pred.get('7d', []),  # 修复：使用d取代p
+            'rolling_30d': rolling_pred.get('30d', []), # 修复：使用d取代p
+            'rolling_100d': rolling_pred.get('100d', []), # 新增100天滚动特征
             'combo': combo_pred,
             'feature_imp': imp_pred,
             'ml_model': ml_pred  # 新增ML模型预测
@@ -718,38 +732,53 @@ class StrategyManager:
         return [z for z, _ in sorted_zodiac[:2]]
     
     def _rolling_prediction(self, features):
-        """基于滚动窗口的预测 - 更新为7期和30期"""
-        # 7期滚动窗口
-        rolling_7p = {}
+        """基于滚动窗口的预测 - 更新为7天、30天和100天"""
+        # 7天滚动窗口
+        rolling_7d = {}
         for z in self.zodiacs:
-            feature_name = f'rolling_7p_{z}'  # 更新为7期
+            feature_name = f'rolling_7d_{z}'  # 修复：使用d取代p
             if feature_name in features:
                 # 确保值是标量而非Series
                 value = features[feature_name]
                 if isinstance(value, pd.Series):
                     # 取最后一个值
                     value = value.iloc[-1] if not value.empty else 0
-                rolling_7p[z] = value
+                rolling_7d[z] = value
         
-        sorted_7p = sorted(rolling_7p.items(), key=lambda x: x[1], reverse=True)
-        pred_7p = [z for z, _ in sorted_7p[:2]] if sorted_7p else []
+        sorted_7d = sorted(rolling_7d.items(), key=lambda x: x[1], reverse=True)
+        pred_7d = [z for z, _ in sorted_7d[:2]] if sorted_7d else []
         
-        # 30期滚动窗口
-        rolling_30p = {}
+        # 30天滚动窗口
+        rolling_30d = {}
         for z in self.zodiacs:
-            feature_name = f'rolling_30p_{z}'  # 更新为30期
+            feature_name = f'rolling_30d_{z}'  # 修复：使用d取代p
             if feature_name in features:
                 # 确保值是标量而非Series
                 value = features[feature_name]
                 if isinstance(value, pd.Series):
                     # 取最后一个值
                     value = value.iloc[-1] if not value.empty else 0
-                rolling_30p[z] = value
+                rolling_30d[z] = value
         
-        sorted_30p = sorted(rolling_30p.items(), key=lambda x: x[1], reverse=True)
-        pred_30p = [z for z, _ in sorted_30p[:2]] if sorted_30p else []
+        sorted_30d = sorted(rolling_30d.items(), key=lambda x: x[1], reverse=True)
+        pred_30d = [z for z, _ in sorted_30d[:2]] if sorted_30d else []
         
-        return {'7p': pred_7p, '30p': pred_30p}  # 更新键名
+        # 100天滚动窗口
+        rolling_100d = {}
+        for z in self.zodiacs:
+            feature_name = f'rolling_100d_{z}'  # 新增100天滚动特征
+            if feature_name in features:
+                # 确保值是标量而非Series
+                value = features[feature_name]
+                if isinstance(value, pd.Series):
+                    # 取最后一个值
+                    value = value.iloc[-1] if not value.empty else 0
+                rolling_100d[z] = value
+        
+        sorted_100d = sorted(rolling_100d.items(), key=lambda x: x[1], reverse=True)
+        pred_100d = [z for z, _ in sorted_100d[:2]] if sorted_100d else []
+        
+        return {'7d': pred_7d, '30d': pred_30d, '100d': pred_100d}
     
     def _importance_weighted_prediction(self, features):
         """基于特征重要性的预测"""
@@ -801,3 +830,45 @@ class StrategyManager:
     def zodiacs(self):
         """生肖列表属性"""
         return ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"]
+
+# 测试函数
+if __name__ == "__main__":
+    print("===== 测试策略管理器 =====")
+    
+    # 创建测试策略管理器
+    manager = StrategyManager()
+    
+    # 创建模拟特征数据
+    features = {
+        'freq_鼠': 0.15, 'freq_牛': 0.12, 'freq_虎': 0.10,
+        'season_鼠': 0.20, 'season_牛': 0.15, 'season_虎': 0.12,
+        'festival_鼠': 0.25, 'festival_牛': 0.18, 'festival_虎': 0.15,
+        'rolling_7d_鼠': 0.18, 'rolling_7d_牛': 0.15, 'rolling_7d_虎': 0.12,
+        'rolling_30d_鼠': 0.16, 'rolling_30d_牛': 0.14, 'rolling_30d_虎': 0.11,
+        'rolling_100d_鼠': 0.15, 'rolling_100d_牛': 0.13, 'rolling_100d_虎': 0.10,
+        'is_festival': 1  # 确保节日特征存在
+    }
+    
+    # 测试生成预测
+    last_zodiac = "鼠"
+    prediction, factor_preds = manager.generate_prediction(features, last_zodiac)
+    print(f"\n综合预测结果: {prediction}")
+    print("\n各因子预测详情:")
+    for factor, preds in factor_preds.items():
+        print(f"- {factor}: {preds}")
+    
+    # 测试权重调整
+    print("\n测试权重调整...")
+    errors = {
+        "鼠": {"牛": 3, "虎": 5},
+        "牛": {"兔": 2}
+    }
+    new_weights = manager.adjust(0.58, errors)
+    print(f"调整后权重: {new_weights}")
+    
+    # 测试因子报告生成
+    print("\n生成因子报告:")
+    report = manager.generate_factor_report()
+    print(report)
+    
+    print("\n===== 测试完成 =====")
