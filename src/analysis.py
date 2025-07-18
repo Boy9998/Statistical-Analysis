@@ -424,7 +424,10 @@ class LotteryAnalyzer:
                 
                 # 使用训练数据更新策略
                 train = self.df.iloc[train_index].copy()
-                self.add_features_to_data(train)
+                
+                # ==== 关键修复：确保应用完整的特征工程 ====
+                train = self.apply_feature_engineering(train)
+                
                 strategy_manager.update_combo_probs(train)
                 strategy_manager.evaluate_factor_validity(train)
                 
@@ -457,8 +460,8 @@ class LotteryAnalyzer:
             # 训练数据：从 i-window 到 i-1 (共window期)
             train = self.df.iloc[i-window:i].copy()
             
-            # 为训练数据添加特征
-            self.add_features_to_data(train)
+            # ==== 关键修复：确保应用完整的特征工程 ====
+            train = self.apply_feature_engineering(train)
             
             # 测试数据：下一期 (i)
             test = self.df.iloc[i:i+1]
@@ -545,6 +548,82 @@ class LotteryAnalyzer:
             print("回测完成: 无有效结果")
         
         return result_df, combined_accuracy
+    
+    def apply_feature_engineering(self, df):
+        """应用完整的特征工程到子数据集"""
+        # 1. 添加基础时序特征
+        df['weekday'] = df['date'].dt.weekday
+        df['month'] = df['date'].dt.month
+        df['quarter'] = df['date'].dt.quarter
+        
+        # 2. 添加农历特征
+        df['lunar'] = df['date'].apply(self.get_lunar_date)
+        
+        # 3. 添加节日特征
+        df['festival'] = df['date'].apply(self.detect_festival)
+        if 'is_festival' not in df.columns:
+            df['is_festival'] = (df['festival'] != "无").astype(int)
+        
+        # 4. 添加季节特征
+        df['season'] = df['date'].apply(self.get_season)
+        
+        # 5. 添加生肖特征
+        self.add_zodiac_features_to_subset(df)
+        
+        # 6. 添加滚动窗口特征
+        self.add_rolling_features_to_subset(df)
+        
+        return df
+    
+    def add_zodiac_features_to_subset(self, df):
+        """为子数据集添加生肖特征"""
+        # 1. 生肖频率特征（基于子集数据）
+        zodiac_counts = df['zodiac'].value_counts(normalize=True)
+        for zodiac in self.zodiacs:
+            df[f'freq_{zodiac}'] = zodiac_counts.get(zodiac, 0.0)
+        
+        # 2. 季节生肖特征
+        for zodiac in self.zodiacs:
+            df[f'season_{zodiac}'] = 0.0
+        
+        for season in ['春', '夏', '秋', '冬']:
+            season_mask = (df['season'] == season)
+            season_data = df.loc[season_mask]
+            if not season_data.empty:
+                season_counts = season_data['zodiac'].value_counts(normalize=True)
+                for zodiac in self.zodiacs:
+                    df.loc[season_mask, f'season_{zodiac}'] = season_counts.get(zodiac, 0.0)
+        
+        # 3. 节日生肖特征
+        for zodiac in self.zodiacs:
+            df[f'festival_{zodiac}'] = 0.0
+        
+        festival_mask = (df['is_festival'] == 1)
+        festival_data = df.loc[festival_mask]
+        if not festival_data.empty:
+            festival_counts = festival_data['zodiac'].value_counts(normalize=True)
+            for zodiac in self.zodiacs:
+                df.loc[festival_mask, f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
+        
+        return df
+    
+    def add_rolling_features_to_subset(self, df):
+        """为子数据集添加滚动窗口特征"""
+        # 使用期数窗口替代自然日窗口
+        periods = [7, 30]  # 7期和30期窗口
+        
+        # 创建生肖出现标志
+        for zodiac in self.zodiacs:
+            df[f'occur_{zodiac}'] = (df['zodiac'] == zodiac).astype(int)
+        
+        for period in periods:
+            for zodiac in self.zodiacs:
+                # 计算滚动频率 - 使用期数窗口
+                df[f'rolling_{period}p_{zodiac}'] = (
+                    df[f'occur_{zodiac}'].rolling(window=period, min_periods=1).mean()
+                )
+        
+        return df
     
     def detect_overfitting(self, result_df, cv_accuracy):
         """检测并防止过拟合"""
@@ -980,7 +1059,7 @@ class LotteryAnalyzer:
         adjustments = []
         for idx, row in top_patterns.iterrows():
             last_zodiac = row['上期生肖']
-            actual = row['实际生肖']
+            actual = row['实际出现生肖']
             count = row['错误次数']
             
             adjustments.append({
