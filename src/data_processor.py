@@ -196,7 +196,7 @@ def generate_feature_signature(df):
         'columns': sorted(df.columns.tolist()),
         'dtypes': {col: str(df[col].dtype) for col in df.columns},
         'shape': (len(df.columns),),
-        'hash': hashlib.sha256(','.join(sorted(df.columns)).hexdigest(),
+        'hash': hashlib.sha256(','.join(sorted(df.columns)).encode('utf-8')).hexdigest(),  # 修复括号问题
         'created_at': pd.Timestamp.now().isoformat()
     }
     
@@ -256,4 +256,3 @@ if __name__ == "__main__":
     print(f"\n特征总数: {feature_count}")
     
     print("\n===== 测试完成 =====")
-[file content end]
