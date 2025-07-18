@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from src.utils import fetch_historical_data, zodiac_mapping, log_error, save_prediction_record
+from src.utils import fetch_historical_data, zodiac_mapping, log_error
 from config import BACKTEST_WINDOW
 from datetime import datetime, timedelta
 import holidays
@@ -91,11 +91,40 @@ class LotteryAnalyzer:
             # 创建错误分析目录
             os.makedirs('error_analysis', exist_ok=True)
             os.makedirs('data', exist_ok=True)  # 确保数据目录存在
+            
+            # 初始化预测记录文件 - 修复：确保文件存在
+            self.initialize_prediction_file()
         else:
             print("警告：未获取到任何有效数据")
             self.strategy_manager = StrategyManager()
             self.ml_predictor = MLPredictor()
             self.patterns = {}
+            self.initialize_prediction_file()
+    
+    def initialize_prediction_file(self):
+        """初始化预测记录文件 - 修复：确保文件存在"""
+        prediction_file = 'data/predictions.csv'
+        
+        # 如果文件不存在，创建并写入表头
+        if not os.path.exists(prediction_file):
+            with open(prediction_file, 'w') as f:
+                f.write("期号,日期,上期生肖,预测生肖,实际生肖,是否命中\n")
+            print(f"已创建预测记录文件: {prediction_file}")
+    
+    def save_prediction_record(self, expect, date, last_zodiac, predicted_zodiacs, actual_zodiac, is_hit):
+        """保存预测记录到文件 - 修复：确保文件存在"""
+        prediction_file = 'data/predictions.csv'
+        
+        # 如果文件不存在，初始化
+        if not os.path.exists(prediction_file):
+            self.initialize_prediction_file()
+        
+        # 将预测生肖列表转换为字符串
+        predicted_str = ','.join(predicted_zodiacs)
+        
+        # 追加记录
+        with open(prediction_file, 'a') as f:
+            f.write(f"{expect},{date},{last_zodiac},{predicted_str},{actual_zodiac},{int(is_hit)}\n")
     
     def add_zodiac_features(self):
         """添加生肖相关特征 - 关键修复"""
@@ -458,8 +487,8 @@ class LotteryAnalyzer:
                 '是否命中': is_hit
             })
             
-            # 保存预测记录到CSV文件（新增历史复盘功能）
-            save_prediction_record(
+            # 保存预测记录到CSV文件（新增历史复盘功能） - 修复：使用内部方法
+            self.save_prediction_record(
                 expect=test['expect'].values[0],
                 date=test['date'].dt.strftime('%Y-%m-%d').values[0],
                 last_zodiac=last_zodiac,
@@ -738,21 +767,6 @@ class LotteryAnalyzer:
                 for zodiac in self.zodiacs:
                     # 更新季节特征值
                     df.loc[season_mask, f'season_{zodiac}'] = season_counts.get(zodiac, 0.0)
-        
-        # 3. 添加节日生肖特征
-        for zodiac in self.zodiacs:
-            # 初始化节日特征列
-            df[f'festival_{zodiac}'] = 0.0
-        
-        # 计算节日中每个生肖的频率
-        # 使用 .loc 进行显式行选择（关键修复）
-        festival_mask = (df['is_festival'] == 1)
-        festival_data = df.loc[festival_mask]
-        if not festival_data.empty:
-            festival_counts = festival_data['zodiac'].value_counts(normalize=True)
-            for zodiac in self.zodiacs:
-                # 更新节日特征值
-                df.loc[festival_mask, f'festival_{zodiac}'] = festival_counts.get(zodiac, 0.0)
     
     def apply_pattern_enhancement(self, prediction, last_zodiac, target_date, data):
         """应用历史模式增强预测 - 强化节日效应和连续/间隔处理"""
@@ -935,8 +949,8 @@ class LotteryAnalyzer:
         # 检查预测记录文件是否存在
         prediction_file = 'data/predictions.csv'
         if not os.path.exists(prediction_file):
-            print("警告: 未找到预测记录文件，无法进行复盘分析")
-            return {}
+            print("警告: 未找到预测记录文件，将创建新文件")
+            self.initialize_prediction_file()
         
         # 加载预测记录
         try:
@@ -1086,3 +1100,37 @@ class LotteryAnalyzer:
             formatted.append(f"- {last_zodiac}→{actual}: {count}次错误")
         
         return "\n".join(formatted)
+
+# 测试函数
+if __name__ == "__main__":
+    print("===== 测试彩票分析器 =====")
+    
+    # 创建测试分析器
+    analyzer = LotteryAnalyzer()
+    
+    # 测试预测记录初始化
+    print("\n测试预测记录文件初始化:")
+    analyzer.initialize_prediction_file()
+    
+    # 测试保存预测记录
+    print("\n测试保存预测记录:")
+    analyzer.save_prediction_record(
+        expect="2023001",
+        date="2023-01-01",
+        last_zodiac="鼠",
+        predicted_zodiacs=["牛", "虎", "兔"],
+        actual_zodiac="龙",
+        is_hit=0
+    )
+    
+    # 测试历史复盘分析
+    print("\n测试历史复盘分析:")
+    review = analyzer.analyze_history()
+    print(f"复盘结果: {review}")
+    
+    # 测试报告生成
+    print("\n测试报告生成:")
+    report = analyzer.generate_report()
+    print(report[:500] + "...")  # 打印部分报告
+    
+    print("\n===== 测试完成 =====")
