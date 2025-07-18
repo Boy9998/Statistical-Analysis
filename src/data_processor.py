@@ -26,6 +26,13 @@ def preprocess_data(df):
         df['zodiac'] = "未知"
     df['zodiac'] = df['zodiac'].apply(lambda x: x if x in FIXED_ZODIACS else "未知")
     
+    # 确保节日特征存在
+    if 'is_festival' not in df.columns:
+        if 'festival' in df.columns:
+            df['is_festival'] = (df['festival'] != "无").astype(int)
+        else:
+            df['is_festival'] = 0
+    
     return df
 
 def add_temporal_features(df):
@@ -122,15 +129,18 @@ def create_fixed_rolling_features(df, window_size):
     """
     创建固定维度的滚动窗口特征（关键修复）
     确保无论数据量多少，都生成相同维度的特征
+    修复维度问题：确保每个窗口生成24个特征（12生肖×2种特征）
     """
-    # 创建固定维度的DataFrame模板
-    template_cols = (
-        [f'rolling_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS] +
-        [f'heat_index_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS]
-    )
+    # 创建固定维度的DataFrame模板 - 每个窗口24个特征
+    template_cols = []
+    for zodiac in FIXED_ZODIACS:
+        template_cols.append(f'rolling_{window_size}d_{zodiac}')
+        template_cols.append(f'heat_index_{window_size}d_{zodiac}')
+    
+    # 创建空DataFrame模板
     template = pd.DataFrame(columns=template_cols)
     
-    # 如果数据为空，直接返回模板
+    # 如果数据为空或缺少必要列，直接返回模板
     if df.empty or 'zodiac' not in df.columns:
         return template
     
@@ -162,27 +172,22 @@ def create_fixed_rolling_features(df, window_size):
             0
         )
     
-    # 创建结果DataFrame
-    rolling_df = pd.DataFrame(
-        rolling_arr,
-        columns=[f'rolling_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS],
-        index=df.index
-    )
+    # 创建结果DataFrame - 确保固定维度
+    result_data = {}
+    for idx, zodiac in enumerate(FIXED_ZODIACS):
+        result_data[f'rolling_{window_size}d_{zodiac}'] = rolling_arr[:, idx]
+        result_data[f'heat_index_{window_size}d_{zodiac}'] = heat_index_arr[:, idx]
     
-    heat_index_df = pd.DataFrame(
-        heat_index_arr,
-        columns=[f'heat_index_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS],
-        index=df.index
-    )
+    result = pd.DataFrame(result_data, index=df.index)
     
-    # 合并特征（确保列顺序固定）
-    result = pd.concat([rolling_df, heat_index_df], axis=1)[template_cols]
-    return result
+    # 确保列顺序固定
+    return result[template_cols]
 
 def add_rolling_features(df):
     """
     添加滚动窗口统计特征（稳定性增强版）
     包括7天、30天、100天滚动频率和热度指数
+    修复：确保总共生成72个特征（3窗口×12生肖×2特征）
     """
     if df.empty:
         return df
@@ -209,14 +214,20 @@ def add_rolling_features(df):
     return df
 
 def generate_feature_signature(df):
-    """生成特征签名并保存到文件"""
+    """生成特征签名并保存到文件 - 增强验证"""
+    # 计算特征哈希（基于列名和数据类型）
+    sorted_columns = sorted(df.columns.tolist())
+    dtype_info = {col: str(df[col].dtype) for col in sorted_columns}
+    
+    # 创建签名哈希
+    hash_input = ','.join([f"{col}:{dtype_info[col]}" for col in sorted_columns])
+    signature_hash = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
+    
     feature_signature = {
-        'columns': sorted(df.columns.tolist()),
-        'dtypes': {col: str(df[col].dtype) for col in df.columns},
+        'columns': sorted_columns,
+        'dtypes': dtype_info,
         'shape': df.shape,
-        'hash': hashlib.sha256(
-            ','.join(sorted(df.columns)).encode('utf-8')
-        ).hexdigest(),
+        'hash': signature_hash,
         'created_at': datetime.now().isoformat()
     }
     
@@ -225,6 +236,7 @@ def generate_feature_signature(df):
         json.dump(feature_signature, f, indent=2)
     
     print(f"特征签名已生成并保存: {signature_path}")
+    print(f"特征维度: {df.shape[1]}列, 签名哈希: {signature_hash[:8]}...")
 
 def add_all_features(df):
     """一次性添加所有特征（稳定性增强版）"""
@@ -259,19 +271,30 @@ if __name__ == "__main__":
     print(test_df[['date', 'zodiac', 'rolling_7d_鼠', 'heat_index_7d_鼠']].tail(10))
     
     # 验证特征存在
-    expected_features = [
-        'rolling_7d_鼠', 'rolling_30d_鼠', 'rolling_100d_鼠',
-        'heat_index_7d_鼠', 'heat_index_30d_鼠', 'heat_index_100d_鼠'
-    ]
+    expected_features = 72  # 3窗口 × 12生肖 × 2特征
+    rolling_features = [col for col in test_df.columns if 'rolling_' in col or 'heat_index_' in col]
     
-    missing = [f for f in expected_features if f not in test_df.columns]
-    if missing:
-        print(f"\n错误: 缺失特征: {', '.join(missing)}")
+    print(f"\n滚动特征数量: {len(rolling_features)} (预期: {expected_features})")
+    if len(rolling_features) != expected_features:
+        print(f"错误: 滚动特征数量不符! 预期 {expected_features}, 实际 {len(rolling_features)}")
     else:
-        print("\n所有滚动特征添加成功")
+        print("滚动特征数量验证通过")
     
-    # 验证特征维度
-    feature_count = len(test_df.columns)
-    print(f"\n特征总数: {feature_count}")
+    # 验证特征签名
+    signature_path = os.path.join(ML_MODEL_PATH, 'feature_signature.json')
+    if os.path.exists(signature_path):
+        with open(signature_path, 'r') as f:
+            signature = json.load(f)
+            print(f"\n特征签名验证:")
+            print(f"- 特征数量: {signature['shape'][1]} (数据: {test_df.shape[1]})")
+            print(f"- 哈希值: {signature['hash'][:8]}...")
+            
+            # 验证特征数量
+            if signature['shape'][1] != test_df.shape[1]:
+                print(f"警告: 特征签名中的特征数量({signature['shape'][1]})与实际特征数量({test_df.shape[1]})不符!")
+            else:
+                print("特征数量验证通过")
+    else:
+        print("警告: 特征签名文件未找到")
     
     print("\n===== 测试完成 =====")
