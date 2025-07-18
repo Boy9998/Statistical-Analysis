@@ -1,3 +1,5 @@
+[file name]: src/ml_predictor.py
+[file content begin]
 import pandas as pd
 import numpy as np
 import joblib
@@ -6,6 +8,8 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 import warnings
 import logging
+import hashlib
+import json
 
 # === 修改：XGBoost 可选导入与降级方案 ===
 XGB_INSTALLED = False
@@ -49,7 +53,7 @@ class MLPredictor:
         
         参数:
             model_type: 模型类型，可选 'auto', 'xgboost', 'randomforest', 'svm', 'gradientboosting'
-                       默认'auto'会自动选择最佳可用模型
+                      默认'auto'会自动选择最佳可用模型
         """
         # 自动选择模型类型
         if model_type == 'auto':
@@ -83,7 +87,7 @@ class MLPredictor:
         preprocessor_path = os.path.join(ML_MODEL_PATH, 'preprocessor.pkl')
         encoder_path = os.path.join(ML_MODEL_PATH, 'label_encoder.pkl')
         features_path = os.path.join(ML_MODEL_PATH, 'feature_columns.txt')
-        signature_path = os.path.join(ML_MODEL_PATH, 'feature_signature.pkl')  # 新增
+        signature_path = os.path.join(ML_MODEL_PATH, 'feature_signature.json')  # 修改为JSON格式
         
         try:
             if os.path.exists(model_path):
@@ -99,9 +103,10 @@ class MLPredictor:
                 with open(features_path, 'r') as f:
                     self.feature_columns = f.read().splitlines()
                 logger.info(f"已加载{len(self.feature_columns)}个特征列")
-            # 新增: 加载特征签名
+            # 加载特征签名
             if os.path.exists(signature_path):
-                self.feature_signature = joblib.load(signature_path)
+                with open(signature_path, 'r') as f:
+                    self.feature_signature = json.load(f)
                 logger.info("已加载特征签名")
         except Exception as e:
             logger.error(f"加载模型失败: {e}")
@@ -119,7 +124,7 @@ class MLPredictor:
         preprocessor_path = os.path.join(ML_MODEL_PATH, 'preprocessor.pkl')
         encoder_path = os.path.join(ML_MODEL_PATH, 'label_encoder.pkl')
         features_path = os.path.join(ML_MODEL_PATH, 'feature_columns.txt')
-        signature_path = os.path.join(ML_MODEL_PATH, 'feature_signature.pkl')  # 新增
+        signature_path = os.path.join(ML_MODEL_PATH, 'feature_signature.json')  # 修改为JSON格式
         
         try:
             joblib.dump(self.model, model_path)
@@ -128,13 +133,88 @@ class MLPredictor:
             joblib.dump(self.label_encoder, encoder_path)
             with open(features_path, 'w') as f:
                 f.write('\n'.join(self.feature_columns))
-            # 新增: 保存特征签名
+            # 保存特征签名
             if self.feature_signature is not None:
-                joblib.dump(self.feature_signature, signature_path)
+                with open(signature_path, 'w') as f:
+                    json.dump(self.feature_signature, f, indent=2)
                 logger.info(f"特征签名已保存到: {signature_path}")
             logger.info(f"模型已保存到: {model_path}")
         except Exception as e:
             logger.error(f"保存模型失败: {e}")
+    
+    def create_feature_signature(self, X):
+        """创建特征签名用于版本控制"""
+        # 计算特征哈希值
+        columns_hash = hashlib.sha256(
+            ','.join(sorted(X.columns)).encode('utf-8')
+        ).hexdigest()
+        
+        # 创建特征签名
+        self.feature_signature = {
+            'columns': sorted(X.columns.tolist()),
+            'dtypes': {col: str(X[col].dtype) for col in X.columns},
+            'shape': (len(X.columns),),
+            'hash': columns_hash,
+            'created_at': pd.Timestamp.now().isoformat()
+        }
+        logger.info(f"创建特征签名: {columns_hash[:8]}...")
+    
+    def validate_feature_signature(self, X):
+        """验证输入特征与训练特征签名是否匹配"""
+        if self.feature_signature is None:
+            logger.error("特征签名不可用，无法验证")
+            return False
+        
+        # 检查特征数量
+        if len(X.columns) != self.feature_signature['shape'][0]:
+            logger.error(f"特征数量不匹配! 训练: {self.feature_signature['shape'][0]}, 输入: {len(X.columns)}")
+            return False
+        
+        # 检查特征列
+        missing_cols = set(self.feature_signature['columns']) - set(X.columns)
+        extra_cols = set(X.columns) - set(self.feature_signature['columns'])
+        
+        if missing_cols or extra_cols:
+            logger.error(f"特征列不匹配! 缺失: {missing_cols}, 多余: {extra_cols}")
+            return False
+        
+        # 检查数据类型
+        for col, dtype in self.feature_signature['dtypes'].items():
+            if str(X[col].dtype) != dtype:
+                logger.error(f"特征 '{col}' 数据类型不匹配! 训练: {dtype}, 输入: {X[col].dtype}")
+                return False
+        
+        logger.info("特征签名验证通过")
+        return True
+    
+    def align_features(self, features):
+        """
+        对齐特征，确保与训练特征一致
+        1. 添加缺失的特征列并用0填充
+        2. 移除多余的特征列
+        3. 确保特征顺序一致
+        """
+        aligned_features = {}
+        
+        # 如果特征签名不可用，直接返回原始特征
+        if self.feature_signature is None:
+            logger.warning("无特征签名可用，跳过特征对齐")
+            return features
+        
+        # 确保所有特征都存在
+        for col in self.feature_signature['columns']:
+            if col in features:
+                aligned_features[col] = features[col]
+            else:
+                logger.warning(f"特征 '{col}' 缺失，填充默认值0")
+                aligned_features[col] = 0
+        
+        # 移除多余特征
+        extra_cols = set(features.keys()) - set(self.feature_signature['columns'])
+        if extra_cols:
+            logger.warning(f"移除多余特征: {extra_cols}")
+        
+        return aligned_features
     
     def prepare_data(self, df):
         """
@@ -197,21 +277,11 @@ class MLPredictor:
         # 编码目标变量
         y_encoded = self.label_encoder.fit_transform(y)
         
-        # 新增: 创建特征签名
+        # 创建特征签名
         self.create_feature_signature(X)
         
         logger.info(f"数据准备完成，特征维度: {X.shape}")
         return X, y_encoded
-    
-    def create_feature_signature(self, X):
-        """创建特征签名用于版本控制"""
-        self.feature_signature = {
-            'columns': list(X.columns),
-            'dtypes': {col: str(X[col].dtype) for col in X.columns},
-            'shape': (len(X.columns),),
-            'hash': hash(tuple(X.columns))
-        }
-        logger.info(f"创建特征签名: {self.feature_signature['hash']}")
     
     def create_preprocessor(self, X):
         """创建特征预处理器，正确处理分类特征"""
@@ -239,60 +309,6 @@ class MLPredictor:
             ])
         
         return preprocessor
-    
-    def validate_feature_signature(self, X):
-        """验证输入特征与训练特征签名是否匹配"""
-        if self.feature_signature is None:
-            logger.warning("无特征签名可用，跳过验证")
-            return False
-        
-        # 检查特征列
-        if set(X.columns) != set(self.feature_signature['columns']):
-            logger.error(f"特征列不匹配! 训练列: {self.feature_signature['columns']}, 输入列: {list(X.columns)}")
-            return False
-        
-        # 检查特征顺序
-        if list(X.columns) != self.feature_signature['columns']:
-            logger.warning("特征顺序不匹配，将调整顺序")
-            X = X[self.feature_signature['columns']]
-        
-        # 检查数据类型
-        for col, dtype in self.feature_signature['dtypes'].items():
-            if str(X[col].dtype) != dtype:
-                logger.error(f"特征 '{col}' 数据类型不匹配! 训练: {dtype}, 输入: {X[col].dtype}")
-                return False
-        
-        logger.info("特征签名验证通过")
-        return True
-    
-    def align_features(self, features):
-        """
-        对齐特征，确保与训练特征一致
-        1. 添加缺失的特征列并用0填充
-        2. 移除多余的特征列
-        3. 确保特征顺序一致
-        """
-        aligned_features = {}
-        
-        # 如果特征签名不可用，直接返回原始特征
-        if self.feature_signature is None:
-            logger.warning("无特征签名可用，跳过特征对齐")
-            return features
-        
-        # 确保所有特征都存在
-        for col in self.feature_signature['columns']:
-            if col in features:
-                aligned_features[col] = features[col]
-            else:
-                logger.warning(f"特征 '{col}' 缺失，填充默认值0")
-                aligned_features[col] = 0
-        
-        # 移除多余特征
-        extra_cols = set(features.keys()) - set(self.feature_signature['columns'])
-        if extra_cols:
-            logger.warning(f"移除多余特征: {extra_cols}")
-        
-        return aligned_features
     
     def train_model(self, df, test_size=0.2, retrain=False):
         """
@@ -564,3 +580,4 @@ if __name__ == "__main__":
             # 预测
             prediction = predictor.predict(features)
             print(f"预测结果: {prediction}")
+[file content end]
