@@ -146,26 +146,37 @@ def create_fixed_rolling_features(df, window_size):
         window=window_size,
         min_periods=1
     ).mean().fillna(0)
-    rolling.columns = [f'rolling_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS]
     
     # 计算长期平均频率（关键修复：处理空值）
     long_term_avg = zodiac_dummies.expanding().mean().fillna(0)
     
     # 计算热度指数（关键修复：安全除法）
+    # 使用数组运算避免维度问题
+    rolling_arr = rolling.values
+    long_term_avg_arr = long_term_avg.values
+    
     with np.errstate(divide='ignore', invalid='ignore'):
-        heat_index = np.where(
-            long_term_avg > 0,
-            rolling / long_term_avg,
+        heat_index_arr = np.where(
+            long_term_avg_arr > 0,
+            rolling_arr / long_term_avg_arr,
             0
         )
-    heat_index = pd.DataFrame(
-        heat_index,
+    
+    # 创建结果DataFrame
+    rolling_df = pd.DataFrame(
+        rolling_arr,
+        columns=[f'rolling_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS],
+        index=df.index
+    )
+    
+    heat_index_df = pd.DataFrame(
+        heat_index_arr,
         columns=[f'heat_index_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS],
         index=df.index
     )
     
     # 合并特征（确保列顺序固定）
-    result = pd.concat([rolling, heat_index], axis=1)[template_cols]
+    result = pd.concat([rolling_df, heat_index_df], axis=1)[template_cols]
     return result
 
 def add_rolling_features(df):
