@@ -1,5 +1,3 @@
-[file name]: src/ml_predictor.py
-[file content begin]
 import pandas as pd
 import numpy as np
 import joblib
