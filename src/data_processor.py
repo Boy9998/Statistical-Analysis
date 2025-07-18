@@ -22,15 +22,21 @@ def preprocess_data(df):
         df['date'] = pd.to_datetime(df['date'])
     
     # 初始化必要列（关键修复）
-    if 'year' not in df.columns:
-        df['year'] = df['date'].dt.year
-    if 'zodiac' not in df.columns:
-        df['zodiac'] = np.random.choice(FIXED_ZODIACS)  # 默认随机生肖
-    if 'festival' not in df.columns:
-        df['festival'] = "无"
+    required_columns = {
+        'year': df['date'].dt.year,
+        'zodiac': np.random.choice(FIXED_ZODIACS, size=len(df)),
+        'festival': "无",
+        'is_festival': 0  # 先初始化为0，后续会正确填充
+    }
+    
+    for col, default in required_columns.items():
+        if col not in df.columns:
+            df[col] = default
     
     # 确保生肖列只包含固定生肖
-    df['zodiac'] = df['zodiac'].apply(lambda x: x if x in FIXED_ZODIACS else np.random.choice(FIXED_ZODIACS))
+    df['zodiac'] = df['zodiac'].apply(
+        lambda x: x if x in FIXED_ZODIACS else np.random.choice(FIXED_ZODIACS)
+    )
     return df
 
 def add_temporal_features(df):
@@ -39,26 +45,27 @@ def add_temporal_features(df):
     df['weekday'] = df['date'].dt.dayofweek + 1  # 1=周一, 7=周日
     df['month'] = df['date'].dt.month
     df['quarter'] = df['date'].dt.quarter
-    print(f"已添加时序特征: 星期几, 月份, 季度 | 当前形状: {df.shape}")
+    print(f"[时序特征] 添加完成 | 形状: {df.shape}")
     return df
 
 def add_lunar_features(df):
     """添加农历特征：农历月份、日期、是否闰月"""
     df = preprocess_data(df)
     
-    def get_lunar_date(dt):
+    def safe_lunar_conversion(dt):
         try:
             solar = Solar(dt.year, dt.month, dt.day)
-            return Converter.Solar2Lunar(solar)
+            lunar = Converter.Solar2Lunar(solar)
+            return lunar
         except Exception as e:
             print(f"农历转换错误: {e}, 日期: {dt}")
             return None
     
-    df['lunar'] = df['date'].apply(get_lunar_date)
+    df['lunar'] = df['date'].apply(safe_lunar_conversion)
     df['lunar_month'] = df['lunar'].apply(lambda x: x.month if x else 0)
     df['lunar_day'] = df['lunar'].apply(lambda x: x.day if x else 0)
     df['is_leap_month'] = df['lunar'].apply(lambda x: 1 if x and x.isleap else 0)
-    print(f"已添加农历特征: 月份, 日期, 闰月 | 当前形状: {df.shape}")
+    print(f"[农历特征] 添加完成 | 形状: {df.shape}")
     return df
 
 def add_festival_features(df):
@@ -76,7 +83,8 @@ def add_festival_features(df):
         if not lunar:
             return "无"
         
-        lunar_festivals = {
+        # 农历节日映射
+        lunar_map = {
             (1, 1): "春节",
             (1, 15): "元宵",
             (5, 5): "端午",
@@ -86,33 +94,36 @@ def add_festival_features(df):
             (9, 9): "重阳"
         }
         
-        solar_festivals = {
+        # 公历节日映射
+        solar_map = {
             (4, 4): "清明",
             (4, 5): "清明",
             (12, 22): "冬至"
         }
         
-        # 春节识别：仅正月初一
+        # 春节识别
         if lunar.month == 1 and lunar.day == 1:
             return "春节"
         
-        if (lunar.month, lunar.day) in lunar_festivals:
-            return lunar_festivals[(lunar.month, lunar.day)]
+        lunar_date = (lunar.month, lunar.day)
+        if lunar_date in lunar_map:
+            return lunar_map[lunar_date]
         
-        if (dt.month, dt.day) in solar_festivals:
-            return solar_festivals[(dt.month, dt.day)]
+        solar_date = (dt.month, dt.day)
+        if solar_date in solar_map:
+            return solar_map[solar_date]
         
         return "无"
     
     # 确保只使用固定节日类别
-    df['festival'] = df['date'].apply(detect_festival).apply(
+    df['festival'] = df['date'].apply(detect_festival)
+    df['festival'] = df['festival'].apply(
         lambda x: x if x in FIXED_FESTIVALS else "无"
     )
     
-    # 添加是否为节日的标志列（关键修复）
+    # 安全添加is_festival列（关键修复）
     df['is_festival'] = (df['festival'] != "无").astype(int)
-    
-    print(f"已添加节日特征: 共{len(FIXED_FESTIVALS)}种节日类型 | 当前形状: {df.shape}")
+    print(f"[节日特征] 添加完成 | 节日类型: {len(FIXED_FESTIVALS)} | 形状: {df.shape}")
     return df
 
 def add_season_features(df):
@@ -126,12 +137,12 @@ def add_season_features(df):
     }
     
     df['season'] = df['date'].dt.month.map(season_map)
-    print(f"已添加季节特征 | 当前形状: {df.shape}")
+    print(f"[季节特征] 添加完成 | 形状: {df.shape}")
     return df
 
 def create_fixed_rolling_features(df, window_size):
     """
-    创建固定维度的滚动窗口特征（稳定性关键修复）
+    创建固定维度的滚动窗口特征（关键修复）
     确保无论数据量多少，都生成相同维度的特征
     """
     # 创建固定维度的DataFrame模板
@@ -146,35 +157,44 @@ def create_fixed_rolling_features(df, window_size):
     if df.empty or 'zodiac' not in df.columns:
         return template
     
-    # 创建生肖虚拟变量（确保只包含固定生肖）
-    zodiac_dummies = pd.get_dummies(df['zodiac']).reindex(columns=FIXED_ZODIACS, fill_value=0)
-    
-    # 计算滚动频率（关键修复：处理NaN值）
-    rolling = zodiac_dummies.rolling(
-        window=window_size,
-        min_periods=1,
-        closed='both'
-    ).mean().fillna(0)
-    rolling.columns = [f'rolling_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS]
-    
-    # 计算长期平均频率（关键修复：使用expanding计算）
-    long_term_avg = zodiac_dummies.expanding(min_periods=1).mean().fillna(0)
-    
-    # 计算热度指数（关键修复：安全除法）
-    heat_index = pd.DataFrame(
-        np.divide(
-            rolling.values,
-            long_term_avg.values,
-            out=np.zeros_like(rolling.values),
-            where=(long_term_avg.values > 0)
-        ),
-        columns=[f'heat_index_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS],
-        index=df.index
-    )
-    
-    # 合并特征（确保列顺序固定）
-    result = pd.concat([rolling, heat_index], axis=1)[template_cols]
-    return result
+    try:
+        # 创建生肖虚拟变量（确保维度稳定）
+        zodiac_dummies = pd.get_dummies(
+            df['zodiac'],
+            columns=FIXED_ZODIACS
+        ).reindex(columns=FIXED_ZODIACS, fill_value=0)
+        
+        # 计算滚动频率（处理边界情况）
+        rolling = zodiac_dummies.rolling(
+            window=window_size,
+            min_periods=1,
+            closed='both'
+        ).mean().fillna(0)
+        rolling.columns = [f'rolling_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS]
+        
+        # 计算长期平均频率（安全计算）
+        long_term_avg = zodiac_dummies.expanding(min_periods=1).mean().fillna(0)
+        
+        # 安全计算热度指数（处理除零）
+        with np.errstate(divide='ignore', invalid='ignore'):
+            heat_index = np.where(
+                long_term_avg > 0.001,  # 避免极小值
+                rolling.values / long_term_avg.values,
+                1.0  # 默认值
+            )
+        
+        heat_index = pd.DataFrame(
+            heat_index,
+            columns=[f'heat_index_{window_size}d_{zodiac}' for zodiac in FIXED_ZODIACS],
+            index=df.index
+        )
+        
+        # 合并特征（确保列顺序）
+        result = pd.concat([rolling, heat_index], axis=1)[template_cols]
+        return result
+    except Exception as e:
+        print(f"滚动特征生成失败: {str(e)}")
+        return template
 
 def add_rolling_features(df):
     """
@@ -184,59 +204,61 @@ def add_rolling_features(df):
     if df.empty:
         return df
     
-    print(f"添加滚动窗口统计特征... | 输入形状: {df.shape}")
+    print(f"[滚动特征] 开始添加... | 输入形状: {df.shape}")
     df = df.sort_values('date').reset_index(drop=True)
     
     try:
         # 为每个窗口创建固定维度的特征
-        rolling_7d = create_fixed_rolling_features(df, 7)
-        rolling_30d = create_fixed_rolling_features(df, 30)
-        rolling_100d = create_fixed_rolling_features(df, 100)
+        rolling_features = []
+        for window in [7, 30, 100]:
+            features = create_fixed_rolling_features(df, window)
+            rolling_features.append(features)
+            print(f"窗口 {window} 天特征生成完成 | 特征数: {len(features.columns)}")
         
-        # 合并所有特征（关键修复：确保列顺序）
-        all_rolling = pd.concat([rolling_7d, rolling_30d, rolling_100d], axis=1)
-        print(f"滚动特征生成完成 | 特征数: {len(all_rolling.columns)}")
+        # 合并所有滚动特征
+        all_rolling = pd.concat(rolling_features, axis=1)
         
-        # 合并到原始数据（关键修复：使用join避免索引问题）
-        df = df.join(all_rolling)
+        # 安全合并到原始数据
+        df = pd.concat([df, all_rolling], axis=1)
         
         # 生成特征签名
         generate_feature_signature(df)
         
-        print(f"已添加滚动窗口统计特征 | 最终形状: {df.shape}")
+        print(f"[滚动特征] 添加完成 | 总特征数: {len(df.columns)}")
         return df
     except Exception as e:
-        print(f"滚动特征生成失败: {str(e)}")
-        raise ValueError(f"无法生成滚动特征: {str(e)}")
+        print(f"滚动特征添加失败: {str(e)}")
+        raise ValueError(f"滚动特征生成错误: {str(e)}")
 
 def generate_feature_signature(df):
-    """生成特征签名并保存到文件（关键修复：增强校验）"""
-    # 创建特征签名
-    feature_signature = {
+    """生成特征签名并保存到文件"""
+    signature = {
+        'version': '1.3.0',
+        'timestamp': datetime.now().isoformat(),
         'columns': sorted(df.columns.tolist()),
         'dtypes': {col: str(df[col].dtype) for col in df.columns},
         'shape': df.shape,
         'hash': hashlib.sha256(
-            ','.join(sorted(df.columns)).encode('utf-8')
-        ).hexdigest(),
-        'created_at': datetime.now().isoformat(),
-        'version': '1.2.0'  # 特征工程版本号
+            str(sorted(df.columns)).encode('utf-8')
+        ).hexdigest()
     }
     
-    # 保存到文件
+    os.makedirs(ML_MODEL_PATH, exist_ok=True)
     signature_path = os.path.join(ML_MODEL_PATH, 'feature_signature.json')
-    with open(signature_path, 'w', encoding='utf-8') as f:
-        json.dump(feature_signature, f, indent=2, ensure_ascii=False)
     
-    print(f"特征签名已生成并保存: {signature_path}")
+    with open(signature_path, 'w', encoding='utf-8') as f:
+        json.dump(signature, f, indent=2, ensure_ascii=False)
+    
+    print(f"特征签名已保存: {signature_path}")
 
 def add_all_features(df):
     """
-    一次性添加所有特征（稳定性增强版）
-    确保特征添加顺序和维度一致性
+    一次性添加所有特征（生产环境使用）
+    返回:
+        DataFrame: 包含所有特征的DataFrame
     """
-    # 固定特征添加顺序
-    feature_steps = [
+    # 特征添加步骤（固定顺序）
+    steps = [
         ('基础时序', add_temporal_features),
         ('农历', add_lunar_features),
         ('节日', add_festival_features),
@@ -244,98 +266,77 @@ def add_all_features(df):
         ('滚动窗口', add_rolling_features)
     ]
     
-    for step_name, step_func in feature_steps:
-        print(f"\n=== 正在添加 {step_name} 特征 ===")
+    for name, func in steps:
         try:
+            print(f"\n=== 开始添加 {name} 特征 ===")
             start_shape = df.shape
-            df = step_func(df)
-            print(f"特征添加成功: {step_name} | 形状变化: {start_shape} -> {df.shape}")
+            df = func(df)
+            print(f"添加成功 | 形状变化: {start_shape} -> {df.shape}")
             
-            # 检查空值
-            if df.isnull().values.any():
-                null_counts = df.isnull().sum()
-                print(f"警告: 发现空值列 - {null_counts[null_counts > 0].to_dict()}")
+            # 空值检查
+            if df.isnull().any().any():
+                null_cols = df.columns[df.isnull().any()].tolist()
+                print(f"警告: 发现空值列 - {null_cols}，正在自动填充...")
                 df = df.fillna(0)
         except Exception as e:
-            print(f"特征添加错误 [{step_name}]: {str(e)}")
-            raise ValueError(f"{step_name} 特征添加失败: {str(e)}")
+            print(f"特征添加失败 [{name}]: {str(e)}")
+            raise ValueError(f"{name} 特征添加错误: {str(e)}")
     
-    # 最终校验
+    # 最终验证
     validate_features(df)
     return df
 
 def validate_features(df):
-    """验证特征完整性（关键修复）"""
-    required_base_columns = {
+    """验证特征完整性"""
+    required_columns = {
         'date', 'year', 'weekday', 'month', 'quarter',
         'lunar_month', 'lunar_day', 'is_leap_month',
         'festival', 'is_festival', 'season'
     }
     
     # 检查基础列
-    missing_base = required_base_columns - set(df.columns)
+    missing_base = required_columns - set(df.columns)
     if missing_base:
         raise ValueError(f"缺失基础特征列: {missing_base}")
     
     # 检查滚动特征
-    expected_rolling_features = []
     for window in [7, 30, 100]:
         for zodiac in FIXED_ZODIACS:
-            expected_rolling_features.extend([
-                f'rolling_{window}d_{zodiac}',
-                f'heat_index_{window}d_{zodiac}'
-            ])
+            if f'rolling_{window}d_{zodiac}' not in df.columns:
+                raise ValueError(f"缺失滚动特征: rolling_{window}d_{zodiac}")
+            if f'heat_index_{window}d_{zodiac}' not in df.columns:
+                raise ValueError(f"缺失热度指数: heat_index_{window}d_{zodiac}")
     
-    missing_rolling = set(expected_rolling_features) - set(df.columns)
-    if missing_rolling:
-        raise ValueError(f"缺失滚动特征: {sorted(missing_rolling)[:5]}... (共{len(missing_rolling)}个)")
-    
-    print(f"所有特征验证通过 | 总特征数: {len(df.columns)} | 包含滚动特征: {len(expected_rolling_features)}")
+    print(f"特征验证通过 | 总列数: {len(df.columns)}")
 
-# 测试函数
 if __name__ == "__main__":
-    print("===== 测试数据处理器 =====")
+    print("===== 数据处理器测试 =====")
     
-    # 创建测试数据
-    test_dates = pd.date_range(start='2023-01-01', periods=100, freq='D')
-    test_df = pd.DataFrame({
-        'date': test_dates,
-        'zodiac': ['鼠', '牛', '虎', '兔', '龙', '蛇', '马', '羊', '猴', '鸡'] * 10
-    })
+    # 测试数据
+    test_data = {
+        'date': pd.date_range('2023-01-01', periods=100),
+        'zodiac': np.random.choice(FIXED_ZODIACS, 100)
+    }
+    test_df = pd.DataFrame(test_data)
     
-    # 测试空数据情况
-    empty_df = pd.DataFrame(columns=['date', 'zodiac'])
-    print("\n测试空数据处理...")
+    # 空数据测试
+    print("\n[测试1] 空数据处理...")
     try:
-        empty_processed = add_all_features(empty_df)
-        print("空数据处理测试通过")
+        empty_result = add_all_features(pd.DataFrame())
+        print("空数据处理成功")
     except Exception as e:
         print(f"空数据处理失败: {str(e)}")
     
-    # 测试正常数据
-    print("\n测试正常数据处理...")
+    # 正常数据测试
+    print("\n[测试2] 正常数据处理...")
     try:
-        test_df = add_all_features(test_df)
-        print("\n测试结果:")
-        print(test_df[['date', 'zodiac', 'festival', 'is_festival', 'rolling_7d_鼠', 'heat_index_7d_鼠']].tail(10))
+        result = add_all_features(test_df.copy())
+        print("\n处理结果样例:")
+        print(result.iloc[-5:, :5])
         
-        # 验证特征存在
-        expected_features = [
-            'rolling_7d_鼠', 'rolling_30d_鼠', 'rolling_100d_鼠',
-            'heat_index_7d_鼠', 'heat_index_30d_鼠', 'heat_index_100d_鼠'
-        ]
-        
-        missing = [f for f in expected_features if f not in test_df.columns]
-        if missing:
-            print(f"\n错误: 缺失特征: {', '.join(missing)}")
-        else:
-            print("\n所有滚动特征添加成功")
-        
-        # 验证特征维度
-        feature_count = len(test_df.columns)
-        print(f"\n特征总数: {feature_count} (预期: 53+)")
-        
+        # 验证关键特征
+        assert 'is_festival' in result.columns
+        assert result['is_festival'].isin([0, 1]).all()
+        print("\n所有测试通过")
     except Exception as e:
         print(f"数据处理失败: {str(e)}")
-    
-    print("\n===== 测试完成 =====")
